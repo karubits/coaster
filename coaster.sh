@@ -140,7 +140,10 @@ notify() {  # notify <priority> <title> <message>
 # Config problems, one per line (empty = OK).
 config_errors() {
     local d b c
-    for c in ffmpeg ffprobe curl jq eject flock mountpoint blockdev udevadm; do
+    local -a progs=(ffmpeg ffprobe curl jq flock)
+    # the drive tools aren't needed to finish work dirs without a disc (--resume)
+    [ "$DEVICE" = --resume ] || progs+=(eject mountpoint blockdev udevadm)
+    for c in "${progs[@]}"; do
         command -v "$c" >/dev/null || echo "missing program: $c (install it, e.g. via ./setup.sh)"
     done
     [ -n "$DESTINATION" ] || echo "DESTINATION is empty (immich, path or both)"

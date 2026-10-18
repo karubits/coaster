@@ -13,7 +13,7 @@ jobs:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update -qq && apt-get install -y -qq ffmpeg jq curl python3 >/dev/null
+      - run: apt-get update -qq && apt-get install -y -qq ffmpeg jq curl python3 eject udev >/dev/null
       - run: tests/smoke.sh
   secrets:
     runs-on: docker
