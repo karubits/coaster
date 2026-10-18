@@ -199,12 +199,16 @@ LABEL="$(udevadm info -q property -n "$DEVICE" | sed -n 's/^ID_FS_LABEL=//p')"
 LABEL="$(printf '%s' "${LABEL:-dvd}" | tr -c 'A-Za-z0-9._-' '_' | sed 's/^_*//;s/_*$//')"
 LABEL="${LABEL:-dvd}"
 
-# Fingerprint = IFO contents + label. Re-encodes aren't bit-identical, so Immich's own
-# checksum dedupe can't catch a re-inserted disc; this ledger does.
+# Fingerprint → ledger skips discs already uploaded without a rip + encode (Immich's
+# checksum dedupe only catches a repeat after that work). School discs from the same
+# authoring tool share a label and can have near-identical IFOs, so besides label + IFO
+# contents hash every file's name, size and mtime (directory metadata only — no VOB
+# reads, works on CSS discs).
 STEP="fingerprint"
-FP="$( { printf '%s\n' "$LABEL"; find "$VIDEO_TS" -maxdepth 1 -iname '*.IFO' -type f -print0 \
-        | sort -z | xargs -0 cat; } | sha256sum | cut -c1-16)"
-if grep -qx "$FP" "$LEDGER" 2>/dev/null; then
+FP="$( { printf 'v2 %s\n' "$LABEL"
+        find "$VIDEO_TS" -maxdepth 1 -iname '*.IFO' -type f -print0 | sort -z | xargs -0 cat
+        find "$MNT" -type f -printf '%P %s %T@\n' | LC_ALL=C sort; } | sha256sum | cut -c1-16)"
+if grep -qxF "$FP" "$LEDGER" 2>/dev/null; then
     log "disc $LABEL ($FP) already uploaded — ejecting"
     eject_disc
     notify 3 "DVD already backed up" "Disc '$LABEL' was already uploaded to Immich; ejected."
