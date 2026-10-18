@@ -13,6 +13,10 @@ eject, insert the next.** Every disc ends up in [Immich](https://immich.app) and
 with no clicking and no UI. It's for self-hosters who run Immich or a NAS and are comfortable
 with a terminal for the one-time setup.
 
+> **Vibe-coded, with care.** coaster was built with
+> [Claude Opus 5.5](https://www.anthropic.com/claude) (Anthropic's AI) — see
+> [how it was made](#how-this-was-made).
+
 | Disc | What you get |
 |---|---|
 | **DVD-Video** | one MP4 (H.264/AAC) per title, deinterlaced, square pixels, dated with the disc's authoring date → Immich album "DVD Uploads" |
@@ -229,6 +233,16 @@ CI runs both, plus a [gitleaks](https://github.com/gitleaks/gitleaks) secret sca
 push and pull request; [Renovate](renovate.json) keeps the CI tooling up to date. Versions
 follow [SemVer](https://semver.org) — see the [CHANGELOG](CHANGELOG.md). Security issues:
 [SECURITY.md](SECURITY.md).
+
+## How this was made
+
+coaster was written with Claude Opus 5.5 as a coding assistant: I described what I wanted, the
+AI wrote most of the code, and I reviewed it, tested it with real discs and run it on my own
+server. To make up for that, every change goes through the checks above (shellcheck, a hardened
+and scored systemd sandbox, smoke tests, secret scanning), and the [CHANGELOG](CHANGELOG.md)
+records what changed and why. It's still a hobby project shared as is (see the
+[license](LICENSE)): read the script before running it as root, try it with a few discs first,
+and please [report](SECURITY.md) anything that looks wrong.
 
 ## License
 
