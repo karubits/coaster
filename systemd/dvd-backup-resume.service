@@ -1,0 +1,26 @@
+# Finish work dirs a failed dvd-backup@ run left behind (no disc needed): convert →
+# upload → album → cleanup. Run after fixing the cause: systemctl start dvd-backup-resume
+[Unit]
+Description=Resume pending DVD backups (no disc needed)
+Documentation=https://git.karubits.com/Karubits/dvd-backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/dvd-backup/env
+ExecStart=/usr/local/sbin/dvd-backup.sh --resume
+# Root is needed to mount the disc (read-only, private to this unit) for the IFO date.
+RuntimeDirectory=dvd-backup
+StateDirectory=dvd-backup
+PrivateMounts=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=-/mnt/data/dvd-backup
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h

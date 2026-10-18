@@ -9,7 +9,7 @@
 # CSS-encrypted discs need libdvdcss2 (Debian: libdvd-pkg); libdvdread dlopen()s it.
 set -euo pipefail
 
-DEVICE="${1:-/dev/sr0}"
+DEVICE="${1:-/dev/sr0}"   # or --resume
 
 : "${IMMICH_URL:?IMMICH_URL not set}"
 : "${IMMICH_API_KEY:?IMMICH_API_KEY not set}"
@@ -59,7 +59,7 @@ on_exit() {
     if [ "$rc" -ne 0 ]; then
         log "FAILED (exit $rc)"
         notify 8 "DVD backup failed ($(hostname -s))" \
-            "Disc '$LABEL' failed during step: $STEP (exit $rc). Work dir kept for retry. See: journalctl -u dvd-backup@${DEVICE##*/}"
+            "Disc '$LABEL' failed during step: $STEP (exit $rc). Work dir kept. Fix the cause, then: systemctl start dvd-backup-resume (journalctl -u dvd-backup@sr0)"
     fi
 }
 trap on_exit EXIT
@@ -69,6 +69,111 @@ immich() {  # immich <method> <path> [curl args...]
     curl -fsS -m 60 -X "$method" -H "x-api-key: $IMMICH_API_KEY" -H "Accept: application/json" \
         "$@" "$IMMICH_URL/api$path"
 }
+
+# Convert → upload → album → cleanup for one work dir. Needs WORK, FP, LABEL, DATE_ISO,
+# DATE_DAY (set by the disc flow, or read back from $WORK/meta.env by --resume).
+process_work() {
+    # ── Convert ──────────────────────────────────────────────────────────────────────
+    # H.264 High + AAC in MP4 (faststart): plays natively in Immich and every browser.
+    # bwdif only touches frames flagged interlaced; scale+setsar → square pixels (DVD is
+    # anamorphic, e.g. 720x480 16:9 → 852x480).
+    STEP="convert"
+    for mkv in "$WORK"/title_*.mkv; do
+        mp4="${mkv%.mkv}.mp4"
+        [ -f "$mp4.done" ] && continue
+        log "encoding $(basename "$mkv") ($ENCODER)"
+        if [ "$ENCODER" = vaapi ]; then
+            venc=(-vaapi_device "$VAAPI_DEVICE"
+                  -vf 'bwdif=deint=interlaced,scale=trunc(ih*dar/2)*2:ih,setsar=1,format=nv12,hwupload'
+                  -c:v h264_vaapi -profile:v high -qp "$VAAPI_QP")
+        else
+            venc=(-vf 'bwdif=deint=interlaced,scale=trunc(ih*dar/2)*2:ih,setsar=1'
+                  -c:v libx264 -preset "$X264_PRESET" -crf "$X264_CRF" -profile:v high -pix_fmt yuv420p)
+        fi
+        t0=$SECONDS
+        ffmpeg -nostdin -hide_banner -loglevel warning -nostats -y -i "$mkv" \
+            -map 0:v:0 -map '0:a:0?' "${venc[@]}" \
+            -c:a aac -b:a "$AUDIO_BITRATE" -ac 2 \
+            -movflags +faststart -metadata creation_time="$DATE_ISO" -metadata title="$LABEL" \
+            "$mp4.part.mp4"
+        mv "$mp4.part.mp4" "$mp4"
+        log "  → $(basename "$mp4") $(du -h "$mp4" | cut -f1) in $((SECONDS - t0))s"
+        touch "$mp4.done"
+    done
+
+    if [ "$DRY_RUN" = 1 ]; then
+        STEP="dry-run"
+        log "DRY_RUN=1 — skipping upload and cleanup; output in $WORK"
+        return 0
+    fi
+
+    # ── Upload ───────────────────────────────────────────────────────────────────────
+    STEP="upload"
+    local mkv mp4 venc t0 n name dur resp status id album_id ids_json total=0
+    local -a ids=()
+    for mp4 in "$WORK"/title_*.mp4; do
+        n="$(basename "$mp4" .mp4)"; n="${n#title_}"
+        name="${LABEL} ${DATE_DAY} t${n}.mp4"
+        dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mp4")"
+        total="$(awk -v a="$total" -v b="$dur" 'BEGIN{printf "%d", a+b}')"
+        log "uploading $name"
+        resp="$(curl -fsS -m 3600 -X POST -H "x-api-key: $IMMICH_API_KEY" -H "Accept: application/json" \
+            -F "assetData=@${mp4};filename=${name};type=video/mp4" \
+            -F "filename=${name}" -F "fileCreatedAt=${DATE_ISO}" -F "fileModifiedAt=${DATE_ISO}" \
+            "$IMMICH_URL/api/assets")"
+        status="$(jq -r .status <<<"$resp")"
+        id="$(jq -r .id <<<"$resp")"
+        case "$status" in
+            created|duplicate) log "  → $status $id"; ids+=("$id") ;;
+            *) log "unexpected upload response: $resp"; exit 6 ;;
+        esac
+    done
+
+    # ── Album ────────────────────────────────────────────────────────────────────────
+    STEP="album"
+    album_id="$(immich GET /albums | jq -r --arg n "$IMMICH_ALBUM" \
+        '[.[] | select(.albumName == $n)][0].id // empty')"
+    ids_json="$(printf '%s\n' "${ids[@]}" | jq -R . | jq -sc .)"
+    if [ -z "$album_id" ]; then
+        log "creating album '$IMMICH_ALBUM'"
+        album_id="$(immich POST /albums -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg n "$IMMICH_ALBUM" --argjson a "$ids_json" '{albumName: $n, assetIds: $a}')" \
+            | jq -r .id)"
+    else
+        immich PUT "/albums/$album_id/assets" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --argjson a "$ids_json" '{ids: $a}')" >/dev/null
+    fi
+
+    # ── Record + cleanup ─────────────────────────────────────────────────────────────
+    STEP="cleanup"
+    echo "$FP" >>"$LEDGER"
+    rm -rf --one-file-system "$WORK"
+    log "done: ${#ids[@]} video(s), ${total}s → album $album_id"
+    notify 5 "DVD backed up to Immich" \
+        "Disc '$LABEL' ($DATE_DAY): ${#ids[@]} video(s), $((total / 60)) min → '$IMMICH_ALBUM' $IMMICH_URL/albums/$album_id"
+}
+
+# ── Resume mode (no disc needed) ─────────────────────────────────────────────────
+# Finish work dirs left by a failed run once the cause is fixed (e.g. API key
+# permissions), without re-inserting the disc:  dvd-backup.sh --resume
+if [ "$DEVICE" = --resume ]; then
+    mkdir -p "$RUN_DIR" "$STATE_DIR"
+    exec 9>"$RUN_DIR/lock"
+    flock 9
+    found=0
+    for meta in "$WORK_ROOT"/*/meta.env; do
+        [ -f "$meta" ] || continue
+        WORK="$(dirname "$meta")"
+        [ -f "$WORK/rip.done" ] || { STEP="resume"; log "skip $WORK (rip incomplete — re-insert the disc)"; continue; }
+        # shellcheck source=/dev/null
+        . "$meta"
+        found=1
+        STEP="resume"; log "resuming disc=$LABEL fp=$FP work=$WORK"
+        process_work
+    done
+    [ "$found" = 1 ] || { STEP="resume"; log "nothing to resume in $WORK_ROOT"; }
+    exit 0
+fi
 
 # ── Wait for the disc ────────────────────────────────────────────────────────────
 mkdir -p "$RUN_DIR" "$STATE_DIR" "$WORK_ROOT" "$MNT"
@@ -115,6 +220,7 @@ DATE_DAY="$(date -d "@$EPOCH" +%Y-%m-%d)"
 
 WORK="$WORK_ROOT/$FP"
 mkdir -p "$WORK"
+printf 'LABEL=%q\nFP=%q\nDATE_ISO=%q\nDATE_DAY=%q\n' "$LABEL" "$FP" "$DATE_ISO" "$DATE_DAY" >"$WORK/meta.env"
 log "disc=$LABEL fp=$FP date=$DATE_ISO work=$WORK"
 
 # ── Rip (stream copy) ────────────────────────────────────────────────────────────
@@ -163,81 +269,4 @@ if [ ! -f "$WORK/rip.done" ]; then
 fi
 eject_disc   # free the drive for the next disc while we convert/upload
 
-# ── Convert ──────────────────────────────────────────────────────────────────────
-# H.264 High + AAC in MP4 (faststart): plays natively in Immich and every browser.
-# bwdif only touches frames flagged interlaced; scale+setsar → square pixels (DVD is
-# anamorphic, e.g. 720x480 16:9 → 854x480).
-STEP="convert"
-for mkv in "$WORK"/title_*.mkv; do
-    mp4="${mkv%.mkv}.mp4"
-    [ -f "$mp4.done" ] && continue
-    log "encoding $(basename "$mkv") ($ENCODER)"
-    if [ "$ENCODER" = vaapi ]; then
-        venc=(-vaapi_device "$VAAPI_DEVICE"
-              -vf 'bwdif=deint=interlaced,scale=trunc(ih*dar/2)*2:ih,setsar=1,format=nv12,hwupload'
-              -c:v h264_vaapi -profile:v high -qp "$VAAPI_QP")
-    else
-        venc=(-vf 'bwdif=deint=interlaced,scale=trunc(ih*dar/2)*2:ih,setsar=1'
-              -c:v libx264 -preset "$X264_PRESET" -crf "$X264_CRF" -profile:v high -pix_fmt yuv420p)
-    fi
-    t0=$SECONDS
-    ffmpeg -nostdin -hide_banner -loglevel warning -nostats -y -i "$mkv" \
-        -map 0:v:0 -map '0:a:0?' "${venc[@]}" \
-        -c:a aac -b:a "$AUDIO_BITRATE" -ac 2 \
-        -movflags +faststart -metadata creation_time="$DATE_ISO" -metadata title="$LABEL" \
-        "$mp4.part.mp4"
-    mv "$mp4.part.mp4" "$mp4"
-    log "  → $(basename "$mp4") $(du -h "$mp4" | cut -f1) in $((SECONDS - t0))s"
-    touch "$mp4.done"
-done
-
-if [ "$DRY_RUN" = 1 ]; then
-    STEP="dry-run"
-    log "DRY_RUN=1 — skipping upload and cleanup; output in $WORK"
-    exit 0
-fi
-
-# ── Upload ───────────────────────────────────────────────────────────────────────
-STEP="upload"
-ids=()
-total=0
-for mp4 in "$WORK"/title_*.mp4; do
-    n="$(basename "$mp4" .mp4)"; n="${n#title_}"
-    name="${LABEL} ${DATE_DAY} t${n}.mp4"
-    dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mp4")"
-    total="$(awk -v a="$total" -v b="$dur" 'BEGIN{printf "%d", a+b}')"
-    log "uploading $name"
-    resp="$(curl -fsS -m 3600 -X POST -H "x-api-key: $IMMICH_API_KEY" -H "Accept: application/json" \
-        -F "assetData=@${mp4};filename=${name};type=video/mp4" \
-        -F "filename=${name}" -F "fileCreatedAt=${DATE_ISO}" -F "fileModifiedAt=${DATE_ISO}" \
-        "$IMMICH_URL/api/assets")"
-    status="$(jq -r .status <<<"$resp")"
-    id="$(jq -r .id <<<"$resp")"
-    case "$status" in
-        created|duplicate) log "  → $status $id"; ids+=("$id") ;;
-        *) log "unexpected upload response: $resp"; exit 6 ;;
-    esac
-done
-
-# ── Album ────────────────────────────────────────────────────────────────────────
-STEP="album"
-album_id="$(immich GET /albums | jq -r --arg n "$IMMICH_ALBUM" \
-    '[.[] | select(.albumName == $n)][0].id // empty')"
-ids_json="$(printf '%s\n' "${ids[@]}" | jq -R . | jq -sc .)"
-if [ -z "$album_id" ]; then
-    log "creating album '$IMMICH_ALBUM'"
-    album_id="$(immich POST /albums -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg n "$IMMICH_ALBUM" --argjson a "$ids_json" '{albumName: $n, assetIds: $a}')" \
-        | jq -r .id)"
-else
-    immich PUT "/albums/$album_id/assets" -H 'Content-Type: application/json' \
-        -d "$(jq -nc --argjson a "$ids_json" '{ids: $a}')" >/dev/null
-fi
-
-# ── Record + cleanup ─────────────────────────────────────────────────────────────
-STEP="cleanup"
-echo "$FP" >>"$LEDGER"
-rm -rf --one-file-system "$WORK"
-log "done: ${#ids[@]} video(s), ${total}s → album $album_id"
-notify 5 "DVD backed up to Immich" \
-    "Disc '$LABEL' ($DATE_DAY): ${#ids[@]} video(s), $((total / 60)) min → '$IMMICH_ALBUM' $IMMICH_URL/albums/$album_id"
+process_work
