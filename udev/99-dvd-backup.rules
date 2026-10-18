@@ -1,0 +1,5 @@
+# Disc inserted into an optical drive and it's a DVD → start the backup unit.
+# A media change is a "change" event (not "add"), so SYSTEMD_WANTS wouldn't fire;
+# systemctl --no-block returns immediately, and a duplicate event is a no-op while
+# the instance is already running.
+ACTION=="change", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ENV{ID_CDROM_MEDIA_DVD}=="1", ENV{ID_FS_TYPE}=="?*", RUN+="/usr/bin/systemctl --no-block start dvd-backup@%k.service"

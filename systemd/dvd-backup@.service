@@ -1,0 +1,26 @@
+# Rip → convert → upload → clean up one DVD. Instance = kernel block device (sr0).
+# Started by udev/99-dvd-backup.rules on disc insert; manual: systemctl start dvd-backup@sr0
+[Unit]
+Description=Back up DVD in /dev/%I to Immich
+Documentation=https://git.karubits.com/Karubits/dvd-backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/dvd-backup/env
+ExecStart=/usr/local/sbin/dvd-backup.sh /dev/%I
+# Root is needed to mount the disc (read-only, private to this unit) for the IFO date.
+RuntimeDirectory=dvd-backup
+StateDirectory=dvd-backup
+PrivateMounts=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=-/mnt/data/dvd-backup
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h

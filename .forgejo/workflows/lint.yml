@@ -1,0 +1,11 @@
+---
+name: lint
+on: [push, pull_request]
+jobs:
+  shellcheck:
+    # Default `docker` label image (node:22-bookworm) — checkout is a JS action.
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq shellcheck
+      - run: shellcheck dvd-backup.sh
