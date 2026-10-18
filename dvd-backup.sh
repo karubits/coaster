@@ -12,7 +12,8 @@
 # a disc so damaged the drive hangs before udev reports it).
 #
 # Config: environment (see dvd-backup.env.example), normally /etc/dvd-backup/env.
-# CSS-encrypted discs need libdvdcss2 (Debian: libdvd-pkg); libdvdread dlopen()s it.
+# Copy-protected (CSS) DVDs need libdvdcss, which libdvdread loads if installed — see the
+# README for the legal caveats. Home-made discs do not need it.
 set -euo pipefail
 # systemd starts us without a locale; labels/file names are UTF-8 (Japanese discs).
 export LC_ALL=C.UTF-8
@@ -25,7 +26,7 @@ IMMICH_ALBUM="${IMMICH_ALBUM:-DVD Uploads}"
 IMMICH_PHOTO_ALBUM="${IMMICH_PHOTO_ALBUM:-Photo Discs}"
 GOTIFY_URL="${GOTIFY_URL:-}"
 GOTIFY_TOKEN="${GOTIFY_TOKEN:-}"
-WORK_ROOT="${WORK_ROOT:-/mnt/data/dvd-backup}"
+WORK_ROOT="${WORK_ROOT:-/var/lib/dvd-backup/work}"
 STATE_DIR="${STATE_DIR:-/var/lib/dvd-backup}"
 RUN_DIR="${RUN_DIR:-/run/dvd-backup}"
 MIN_TITLE_SECONDS="${MIN_TITLE_SECONDS:-20}"
@@ -69,6 +70,7 @@ eject_disc() {
 
 FAIL_DETAIL=""
 WORK=""
+case "$DEVICE" in --*) UNIT="dvd-backup${DEVICE/--/-}" ;; *) UNIT="dvd-backup@${DEVICE##*/}" ;; esac
 on_exit() {
     local rc=$?
     unmount_disc
@@ -80,13 +82,13 @@ on_exit() {
         [ "$EJECT" = 1 ] && { timeout 60 eject "$DEVICE" || log "eject failed"; }
         [ -n "$WORK" ] && [ "$DRY_RUN" != 1 ] && rm -rf --one-file-system "$WORK"
         notify 8 "Disc can't be read ($(hostname -s))" \
-            "Disc '$LABEL' could not be read (step: $STEP) and was ejected. Clean it and try again, or try another drive. Details: journalctl -u dvd-backup@${DEVICE##*/}"
+            "Disc '$LABEL' could not be read (step: $STEP) and was ejected. Clean it and try again, or try another drive. Details: journalctl -u $UNIT"
         return
     fi
     if [ "$rc" -ne 0 ]; then
         log "FAILED (exit $rc)"
         notify 8 "Disc backup failed ($(hostname -s))" \
-            "Disc '$LABEL' failed during step: $STEP (exit $rc).${FAIL_DETAIL:+ $FAIL_DETAIL} Work dir kept. Fix the cause, then: systemctl start dvd-backup-resume (journalctl -u dvd-backup@sr0)"
+            "Disc '$LABEL' failed during step: $STEP (exit $rc).${FAIL_DETAIL:+ $FAIL_DETAIL} Work dir kept. Fix the cause, then: systemctl start dvd-backup-resume (journalctl -u $UNIT)"
     fi
 }
 trap on_exit EXIT

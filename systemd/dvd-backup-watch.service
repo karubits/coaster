@@ -2,7 +2,7 @@
 # (dvd-backup.sh --watch follows the kernel log for sr* timeouts / device offline).
 [Unit]
 Description=Watch optical drives for unreadable discs
-Documentation=https://git.karubits.com/Karubits/dvd-backup
+Documentation=https://github.com/Karubits/dvd-backup
 
 [Service]
 EnvironmentFile=/etc/dvd-backup/env

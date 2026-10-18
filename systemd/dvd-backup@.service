@@ -1,8 +1,8 @@
-# Rip → convert → upload → clean up one DVD. Instance = kernel block device (sr0).
+# Back up one disc to Immich (DVD-Video and/or photos). Instance = kernel block device.
 # Started by udev/99-dvd-backup.rules on disc insert; manual: systemctl start dvd-backup@sr0
 [Unit]
-Description=Back up DVD in /dev/%I to Immich
-Documentation=https://git.karubits.com/Karubits/dvd-backup
+Description=Back up disc in /dev/%I to Immich
+Documentation=https://github.com/Karubits/dvd-backup
 After=network-online.target
 Wants=network-online.target
 
@@ -10,14 +10,17 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=/etc/dvd-backup/env
 ExecStart=/usr/local/sbin/dvd-backup.sh /dev/%I
-# Root is needed to mount the disc (read-only, private to this unit) for the IFO date.
+# Root is needed to mount the disc (read-only, private to this unit).
+# Writable: StateDirectory (/var/lib/dvd-backup, incl. the default WORK_ROOT). For a
+# WORK_ROOT elsewhere add a drop-in (systemctl edit <unit>):
+#   [Service]
+#   ReadWritePaths=/your/work/root
 RuntimeDirectory=dvd-backup
 StateDirectory=dvd-backup
 PrivateMounts=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=-/mnt/data/dvd-backup
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 NoNewPrivileges=yes
