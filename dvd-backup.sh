@@ -14,6 +14,8 @@
 # Config: environment (see dvd-backup.env.example), normally /etc/dvd-backup/env.
 # CSS-encrypted discs need libdvdcss2 (Debian: libdvd-pkg); libdvdread dlopen()s it.
 set -euo pipefail
+# systemd starts us without a locale; labels/file names are UTF-8 (Japanese discs).
+export LC_ALL=C.UTF-8
 
 DEVICE="${1:-/dev/sr0}"   # or --resume | --watch
 
@@ -109,7 +111,8 @@ immich() {  # immich <method> <path> [curl args...]
 UPLOADED_IDS=()
 upload() {  # upload <file> <filename> <ISO date>
     local f="$1" name="$2" date="$3" resp status id
-    id="$(awk -F'\t' -v p="$f" '$1 == p {print $2; exit}' "$WORK/uploaded.tsv" 2>/dev/null)"
+    id=""
+    [ -f "$WORK/uploaded.tsv" ] && id="$(awk -F'\t' -v p="$f" '$1 == p {print $2; exit}' "$WORK/uploaded.tsv")"
     if [ -z "$id" ]; then
         resp="$(immich POST /assets -F "assetData=@${f};filename=${name}" -F "filename=${name}" \
             -F "fileCreatedAt=${date}" -F "fileModifiedAt=${date}")"
@@ -293,10 +296,11 @@ done
 props="$(udevadm info -q property -n "$DEVICE")"
 IS_CD=0
 grep -qE '^ID_CDROM_MEDIA_CD(_R|_RW)?=1$' <<<"$props" && IS_CD=1
+FSTYPE="$(sed -n 's/^ID_FS_TYPE=//p' <<<"$props")"
 
 STEP="mount"
-if [ "$IS_CD" = 1 ]; then
-    mount -o ro -t iso9660 "$DEVICE" "$MNT"
+if [ "$IS_CD" = 1 ] || [ "$FSTYPE" = iso9660 ]; then
+    mount -o ro -t iso9660 "$DEVICE" "$MNT" 2>/dev/null || mount -o ro "$DEVICE" "$MNT"
 else
     mount -o ro -t udf "$DEVICE" "$MNT" 2>/dev/null || mount -o ro "$DEVICE" "$MNT"
 fi
@@ -314,7 +318,7 @@ VIDEO_TS="$(find "$MNT" -maxdepth 1 -iname VIDEO_TS -type d | head -n1)"
 ext_re="$(tr -s ' \n' '|' <<<"$MEDIA_EXT" | sed 's/^|//;s/|$//')"
 mapfile -d '' MEDIA_FILES < <(find "$MNT" \( -ipath "$MNT/VIDEO_TS" -o -ipath "$MNT/AUDIO_TS" \) -prune \
     -o -type f -regextype posix-extended -iregex ".*\.($ext_re)" -print0 | sort -z)
-log "label=$LABEL cd=$IS_CD video_ts=${VIDEO_TS:+yes} media_files=${#MEDIA_FILES[@]}"
+log "label=$LABEL cd=$IS_CD fs=${FSTYPE:-?} video_ts=${VIDEO_TS:+yes} media_files=${#MEDIA_FILES[@]}"
 
 if [ -z "$VIDEO_TS" ] && [ "${#MEDIA_FILES[@]}" -eq 0 ]; then
     log "no DVD-Video and no photos/videos on disc — nothing to import, ejecting"
