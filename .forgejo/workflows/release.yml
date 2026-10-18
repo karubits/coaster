@@ -1,37 +1,51 @@
-# Tag vX.Y.Z pushed → Forgejo release with that version's CHANGELOG section as notes,
-# published by the Actions bot. tools/release-notes.sh refuses a tag that doesn't match
-# VERSION in coaster.sh / CHANGELOG. Run it by hand (workflow_dispatch) to (re)create the
-# release of an existing tag (delete the old release first) — the notes come from that tag.
+# Release (run by hand: Actions → release → Run workflow). Tags the commit as v<VERSION from
+# coaster.sh> — annotated, tagger "Karubits <karubits@proton.me>" — pushes the tag with the
+# Actions token and publishes the release with that version's CHANGELOG section as notes, so
+# the Forgejo release and tag belong to the Actions bot, not to a personal account. Don't push
+# release tags by hand. tools/release-notes.sh refuses a version without a CHANGELOG section.
+# The GitHub mirror receives the tag and runs .github/workflows/release.yml.
 name: release
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing tag, e.g. v0.4.1
-        required: true
+      commit:
+        description: Commit to release (default: the tip of the branch you run this on)
+        required: false
 jobs:
   release:
     runs-on: docker
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4   # the tagged tree (older tags may predate tools/)
+      - uses: actions/checkout@v4   # current tools/
+      - uses: actions/checkout@v4   # the commit to release (older ones may predate tools/)
         with:
-          ref: ${{ inputs.tag || forgejo.ref }}
+          ref: ${{ inputs.commit || forgejo.sha }}
           path: tagged
-      - name: Create the release
+          fetch-depth: 0
+      - name: Tag and release
         env:
           TOKEN: ${{ forgejo.token }}
-          TAG: ${{ inputs.tag || forgejo.ref_name }}
           API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}/releases
         run: |
           apt-get update -qq && apt-get install -y -qq jq >/dev/null
-          notes="$(tools/release-notes.sh "$TAG" tagged)"
-          if curl -fsS -o /dev/null -H "Authorization: token $TOKEN" "$API/tags/$TAG"; then
-            echo "release $TAG already exists"
+          version="$(sed -n 's/^VERSION=//p' tagged/coaster.sh)"
+          tag="v$version"
+          notes="$(tools/release-notes.sh "$tag" tagged)"
+          cd tagged
+          commit="$(git rev-parse HEAD)"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git fetch -q origin "refs/tags/$tag:refs/tags/$tag"
+            [ "$(git rev-parse "$tag^{commit}")" = "$commit" ] \
+              || { echo "$tag already exists on another commit — bump VERSION" >&2; exit 1; }
+            echo "tag $tag exists on $commit"
           else
-            jq -n --arg t "$TAG" --arg b "$notes" '{tag_name: $t, name: $t, body: $b}' \
+            git -c user.name=Karubits -c user.email=karubits@proton.me tag -a "$tag" -m "$tag" "$commit"
+            git push -q origin "refs/tags/$tag"
+            echo "tagged $commit as $tag"
+          fi
+          if curl -fsS -o /dev/null -H "Authorization: token $TOKEN" "$API/tags/$tag"; then
+            echo "release $tag already exists"
+          else
+            jq -n --arg t "$tag" --arg b "$notes" '{tag_name: $t, name: $t, body: $b}' \
               | curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
-                  --data-binary @- "$API" | jq -r .html_url
+                  --data-binary @- "$API" | jq -r '"\(.html_url) (by \(.author.login))"'
           fi

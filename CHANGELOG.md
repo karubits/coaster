@@ -6,9 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. 
 ## [0.4.1] - 2026-10-18
 
 ### Added
-- Release automation: pushing a tag `vX.Y.Z` publishes the release (Forgejo and GitHub) with
-  the version's CHANGELOG section as notes; a tag that doesn't match `VERSION` / the CHANGELOG
-  is refused (`tools/release-notes.sh`).
+- Release automation: the release workflow (run by hand on Forgejo) tags the commit
+  `v<VERSION>` and publishes the release with the version's CHANGELOG section as notes; the
+  GitHub mirror creates its release when the tag arrives (`tools/release-notes.sh`).
 - Renovate (`renovate.json`, weekly on Forgejo): PRs for the pinned CI actions, gitleaks and
   Renovate itself, after a 7-day release age.
 - README badges: CI, release, license, Renovate.

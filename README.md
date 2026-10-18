@@ -253,10 +253,10 @@ address families, …); see `systemd-analyze security coaster@sr0`.
 
 **Releases:** [Semantic Versioning](https://semver.org). To release: bump `VERSION` in
 `coaster.sh`, add a `## [X.Y.Z] - date` section to [CHANGELOG.md](CHANGELOG.md) (lint checks
-they match), commit, `git tag -a vX.Y.Z -m vX.Y.Z && git push --follow-tags`. The release
-workflow then publishes the release with that CHANGELOG section as notes
-(`tools/release-notes.sh` refuses a tag that doesn't match). `setup.sh` shows the version
-change on update and refuses downgrades.
+they match), commit and push, then run the **release** workflow (Forgejo → Actions). It tags
+the commit `vX.Y.Z` and publishes the release with that CHANGELOG section as notes
+(`tools/release-notes.sh` refuses a version without one); the GitHub mirror gets the tag and
+creates its release too. `setup.sh` shows the version change on update and refuses downgrades.
 
 Security issues: see [SECURITY.md](SECURITY.md).
 
