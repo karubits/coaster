@@ -3,6 +3,13 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. Versions follow
 [Semantic Versioning](https://semver.org); each one is a git tag `vX.Y.Z` (and a release).
 
+## [0.4.3] - 2026-10-18
+
+### Fixed
+- The missing-program check from 0.4.2 also required the drive tools (eject, udevadm, …)
+  for `--resume`, which doesn't use the drive. They're now only required for disc runs and
+  `--check`.
+
 ## [0.4.2] - 2026-10-18
 
 ### Changed
@@ -108,6 +115,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. 
 - udev-triggered DVD rip → H.264/AAC MP4 → Immich upload, `--resume` mode and
   `dvd-backup-resume.service`.
 
+[0.4.3]: https://github.com/Karubits/coaster/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Karubits/coaster/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Karubits/coaster/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Karubits/coaster/compare/v0.3.0...v0.4.0

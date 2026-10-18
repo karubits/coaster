@@ -21,7 +21,7 @@ set -euo pipefail
 # systemd starts us without a locale; labels/file names are UTF-8 (Japanese discs).
 export LC_ALL=C.UTF-8
 
-VERSION=0.4.2
+VERSION=0.4.3
 DEVICE="${1:-/dev/sr0}"   # or --resume | --watch | --check | --test-notify | --version
 [ "$DEVICE" = --version ] && { echo "coaster $VERSION"; exit 0; }
 
