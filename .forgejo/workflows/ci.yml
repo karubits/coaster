@@ -1,0 +1,27 @@
+# Same as .github/workflows/ci.yml, on the default `docker` runner image (node:22-bookworm,
+# runs as root) — checkout is a JS action.
+name: ci
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq shellcheck systemd >/dev/null
+      - run: tests/lint.sh
+  test:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq ffmpeg jq curl python3 >/dev/null
+      - run: tests/smoke.sh
+  secrets:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (whole history)
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --redact --no-banner .

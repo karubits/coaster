@@ -2,4 +2,4 @@
 # TRACK_COUNT_DATA (from cdrom_id) excludes audio CDs. A media change is a "change"
 # event (not "add"), so SYSTEMD_WANTS wouldn't fire; systemctl --no-block returns
 # immediately, and a duplicate event is a no-op while the instance is running.
-ACTION=="change", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ENV{ID_CDROM_MEDIA}=="1", ENV{ID_CDROM_MEDIA_TRACK_COUNT_DATA}=="?*", RUN+="/usr/bin/systemctl --no-block start dvd-backup@%k.service"
+ACTION=="change", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ENV{ID_CDROM_MEDIA}=="1", ENV{ID_CDROM_MEDIA_TRACK_COUNT_DATA}=="?*", RUN+="/usr/bin/systemctl --no-block start coaster@%k.service"

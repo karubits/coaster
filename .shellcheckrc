@@ -1,0 +1,6 @@
+# Default checks plus these optional ones (shellcheck --list-optional). The brace/[[ style
+# checks (require-variable-braces, require-double-brackets) are left off on purpose.
+enable=add-default-case
+enable=avoid-nullary-conditions
+enable=check-unassigned-uppercase
+enable=deprecate-which

@@ -1,0 +1,38 @@
+# Back up one disc to Immich and/or a folder (DVD-Video and/or photos). Instance = kernel block device.
+# Started by udev/99-coaster.rules on disc insert; manual: systemctl start coaster@sr0
+[Unit]
+Description=Back up disc in /dev/%I
+Documentation=https://github.com/Karubits/coaster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/coaster/env
+ExecStart=/usr/local/sbin/coaster /dev/%I
+# Root is needed to mount the disc (read-only, private to this unit).
+# Writable: StateDirectory (/var/lib/coaster, incl. the default WORK_ROOT). setup.sh
+# adds a drop-in (<unit>.d/50-paths.conf) with ReadWritePaths= for a WORK_ROOT elsewhere
+# and for SAVE_DIR.
+RuntimeDirectory=coaster
+StateDirectory=coaster
+PrivateMounts=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+# Hardening that doesn't get in the way of mount/eject/ffmpeg/curl (systemd-analyze security).
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h

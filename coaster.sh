@@ -1,34 +1,52 @@
 #!/usr/bin/env bash
-# dvd-backup — back up an optical disc to Immich, then delete every local leftover.
+# coaster — back up an optical disc to Immich and/or a folder, then delete every local
+# leftover.
 #   • DVD-Video (VIDEO_TS): rip each title, convert to H.264/AAC MP4 → album IMMICH_ALBUM
-#   • Photo/data CD or DVD: copy photos + videos off the disc, upload the originals
+#   • Photo/data CD or DVD: copy photos + videos off the disc, keep the originals
 #     unchanged (Immich reads EXIF) → album IMMICH_PHOTO_ALBUM
 #   A disc with both (e.g. a slideshow DVD plus a JPEG folder) gets both.
+#   DESTINATION=path saves to SAVE_DIR/<date> <label>/ instead of (or besides) Immich.
 #
-# Started by udev (udev/99-dvd-backup.rules) via dvd-backup@<kernel-dev>.service when a
-# data disc is inserted. Can also be run by hand:  sudo dvd-backup.sh /dev/sr0
+# Started by udev (udev/99-coaster.rules) via coaster@<kernel-dev>.service when a
+# data disc is inserted. Can also be run by hand:  sudo coaster /dev/sr0
 #
-# Modes: dvd-backup.sh <device> | --resume (finish failed runs, no disc) | --watch (alert on
-# a disc so damaged the drive hangs before udev reports it).
+# Modes: coaster <device> | --resume (finish failed runs, no disc) | --watch (alert on
+# a disc so damaged the drive hangs before udev reports it) | --check (test the config) |
+# --test-notify (send a test notification) | --version.
 #
-# Config: environment (see dvd-backup.env.example), normally /etc/dvd-backup/env.
+# Config: environment (see coaster.env.example), normally /etc/coaster/env.
 # Copy-protected (CSS) DVDs need libdvdcss, which libdvdread loads if installed — see the
 # README for the legal caveats. Home-made discs do not need it.
 set -euo pipefail
 # systemd starts us without a locale; labels/file names are UTF-8 (Japanese discs).
 export LC_ALL=C.UTF-8
 
-DEVICE="${1:-/dev/sr0}"   # or --resume | --watch
+VERSION=0.4.0
+DEVICE="${1:-/dev/sr0}"   # or --resume | --watch | --check | --test-notify | --version
+[ "$DEVICE" = --version ] && { echo "coaster $VERSION"; exit 0; }
 
-: "${IMMICH_URL:?IMMICH_URL not set}"
-: "${IMMICH_API_KEY:?IMMICH_API_KEY not set}"
+DESTINATION="${DESTINATION:-immich}"   # immich | path | "immich path"
+IMMICH_URL="${IMMICH_URL:-}"
+IMMICH_API_KEY="${IMMICH_API_KEY:-}"
 IMMICH_ALBUM="${IMMICH_ALBUM:-DVD Uploads}"
 IMMICH_PHOTO_ALBUM="${IMMICH_PHOTO_ALBUM:-Photo Discs}"
+SAVE_DIR="${SAVE_DIR:-}"               # DESTINATION=path: one folder per disc in here
+SAVE_OWNER="${SAVE_OWNER:-}"           # optional user[:group] for saved files
+NOTIFY="${NOTIFY:-auto}"               # auto | none | gotify,ntfy,pushover,webhook
 GOTIFY_URL="${GOTIFY_URL:-}"
 GOTIFY_TOKEN="${GOTIFY_TOKEN:-}"
-WORK_ROOT="${WORK_ROOT:-/var/lib/dvd-backup/work}"
-STATE_DIR="${STATE_DIR:-/var/lib/dvd-backup}"
-RUN_DIR="${RUN_DIR:-/run/dvd-backup}"
+NTFY_URL="${NTFY_URL:-https://ntfy.sh}"
+NTFY_TOPIC="${NTFY_TOPIC:-}"
+NTFY_TOKEN="${NTFY_TOKEN:-}"
+PUSHOVER_TOKEN="${PUSHOVER_TOKEN:-}"
+PUSHOVER_USER="${PUSHOVER_USER:-}"
+PUSHOVER_API="${PUSHOVER_API:-https://api.pushover.net/1/messages.json}"   # tests override
+WEBHOOK_URL="${WEBHOOK_URL:-}"
+WEBHOOK_FORMAT="${WEBHOOK_FORMAT:-json}"   # json | slack (also Mattermost) | discord
+WEBHOOK_HEADER="${WEBHOOK_HEADER:-}"       # optional, e.g. "Authorization: Bearer …"
+WORK_ROOT="${WORK_ROOT:-/var/lib/coaster/work}"
+STATE_DIR="${STATE_DIR:-/var/lib/coaster}"
+RUN_DIR="${RUN_DIR:-/run/coaster}"
 MIN_TITLE_SECONDS="${MIN_TITLE_SECONDS:-20}"
 ENCODER="${ENCODER:-x264}"          # x264 | vaapi
 X264_PRESET="${X264_PRESET:-slow}"
@@ -45,18 +63,102 @@ MEDIA_EXT="jpg jpeg jpe jfif png gif webp avif heic heif tif tiff bmp jxl psd
   mp4 m4v mov qt 3gp 3gpp avi mkv mpg mpeg mp2 m2ts mts webm wmv flv mxf"
 
 IMMICH_URL="${IMMICH_URL%/}"
+SAVE_DIR="${SAVE_DIR%/}"
+DESTINATION="${DESTINATION//,/ }"
 MNT="$RUN_DIR/mnt"
 LEDGER="$STATE_DIR/done.log"
 STEP="init"
 LABEL="disc"
 
 log() { echo "[$STEP] $*" >&2; }
+want() { [[ " $DESTINATION " == *" $1 "* ]]; }   # want immich|path
 
+# Notification backends: NOTIFY lists them; "auto" = every backend that is configured.
+NOTIFY_TO=()
+for b in ${NOTIFY//,/ }; do
+    case "$b" in
+        auto)
+            if [ -n "$GOTIFY_URL" ] && [ -n "$GOTIFY_TOKEN" ]; then NOTIFY_TO+=(gotify); fi
+            if [ -n "$NTFY_TOPIC" ]; then NOTIFY_TO+=(ntfy); fi
+            if [ -n "$PUSHOVER_TOKEN" ] && [ -n "$PUSHOVER_USER" ]; then NOTIFY_TO+=(pushover); fi
+            if [ -n "$WEBHOOK_URL" ]; then NOTIFY_TO+=(webhook); fi ;;
+        none) ;;
+        *) NOTIFY_TO+=("$b") ;;
+    esac
+done
+
+# Secrets (API key, tokens, webhook URL) go to curl as a config on a pipe, never as
+# arguments: arguments are readable by every local user (ps, /proc/*/cmdline).
+curl_cfg() {  # curl_cfg <option> <value> [<option> <value>...] — curl config lines
+    local v
+    while [ "$#" -ge 2 ]; do
+        v="${2//\\/\\\\}"; v="${v//\"/\\\"}"
+        printf '%s = "%s"\n' "$1" "$v"; shift 2
+    done
+}
+
+# One message to every backend; a failing backend is logged and ignored. Priority uses
+# Gotify's 0–10 scale (3 info, 5 success, 8 failure) and is mapped for the others.
+NOTIFY_FAILED=0
 notify() {  # notify <priority> <title> <message>
-    [ -n "$GOTIFY_URL" ] && [ -n "$GOTIFY_TOKEN" ] || return 0
-    curl -fsS -m 20 -H "X-Gotify-Key: $GOTIFY_TOKEN" \
-        -F "title=$2" -F "message=$3" -F "priority=$1" \
-        "${GOTIFY_URL%/}/message" >/dev/null || log "gotify notify failed (ignored)"
+    local p="$1" title="$2" msg="$3" b rc host
+    local -a cfg
+    host="$(hostname -s)"
+    for b in "${NOTIFY_TO[@]}"; do
+        rc=0
+        case "$b" in
+            gotify)
+                curl -fsS -m 20 -K <(curl_cfg header "X-Gotify-Key: $GOTIFY_TOKEN") --form-string "title=$title" \
+                    --form-string "message=$msg" -F "priority=$p" "${GOTIFY_URL%/}/message" >/dev/null || rc=$? ;;
+            ntfy)   # JSON publish: UTF-8 titles (headers would need RFC 2047)
+                cfg=(header 'Content-Type: application/json')
+                [ -z "$NTFY_TOKEN" ] || cfg+=(header "Authorization: Bearer $NTFY_TOKEN")
+                jq -nc --arg t "$NTFY_TOPIC" --arg ti "$title" --arg m "$msg" \
+                        --argjson p "$( ((p >= 8)) && echo 4 || { ((p >= 5)) && echo 3 || echo 2; })" \
+                        --arg tag "$( ((p >= 8)) && echo warning || echo dvd)" \
+                        '{topic: $t, title: $ti, message: $m, priority: $p, tags: [$tag]}' \
+                    | curl -fsS -m 20 -K <(curl_cfg "${cfg[@]}") --data-binary @- "${NTFY_URL%/}" >/dev/null || rc=$? ;;
+            pushover)
+                curl -fsS -m 20 -K <(curl_cfg form-string "token=$PUSHOVER_TOKEN" form-string "user=$PUSHOVER_USER") \
+                    --form-string "title=$title" --form-string "message=$msg" \
+                    -F "priority=$( ((p >= 8)) && echo 1 || { ((p >= 5)) && echo 0 || echo -1; })" \
+                    "$PUSHOVER_API" >/dev/null || rc=$? ;;
+            webhook)   # the URL itself is a secret for Slack/Discord/Mattermost
+                cfg=(url "$WEBHOOK_URL" header 'Content-Type: application/json')
+                [ -z "$WEBHOOK_HEADER" ] || cfg+=(header "$WEBHOOK_HEADER")
+                jq -nc --arg f "$WEBHOOK_FORMAT" --arg ti "$title" --arg m "$msg" --argjson p "$p" --arg h "$host" '
+                        if $f == "slack" then {text: "\($ti)\n\($m)"}
+                        elif $f == "discord" then {content: "**\($ti)**\n\($m)"}
+                        else {title: $ti, message: $m, priority: $p, host: $h} end' \
+                    | curl -fsS -m 20 -K <(curl_cfg "${cfg[@]}") --data-binary @- >/dev/null || rc=$? ;;
+            *) log "unknown notification backend '$b' (ignored)"; rc=1 ;;
+        esac
+        if [ "$rc" -ne 0 ]; then log "$b notify failed (ignored)"; NOTIFY_FAILED=1; fi
+    done
+}
+
+# Config problems, one per line (empty = OK).
+config_errors() {
+    local d b
+    [ -n "$DESTINATION" ] || echo "DESTINATION is empty (immich, path or both)"
+    for d in $DESTINATION; do
+        case "$d" in immich|path) ;; *) echo "DESTINATION: unknown '$d' (immich, path)" ;; esac
+    done
+    if want immich; then
+        [ -n "$IMMICH_URL" ] || echo "IMMICH_URL not set"
+        [ -n "$IMMICH_API_KEY" ] || echo "IMMICH_API_KEY not set"
+    fi
+    if want path; then [ -n "$SAVE_DIR" ] || echo "SAVE_DIR not set (DESTINATION includes path)"; fi
+    for b in "${NOTIFY_TO[@]}"; do
+        case "$b" in
+            gotify) [ -n "$GOTIFY_URL" ] && [ -n "$GOTIFY_TOKEN" ] || echo "NOTIFY=gotify needs GOTIFY_URL and GOTIFY_TOKEN" ;;
+            ntfy) [ -n "$NTFY_TOPIC" ] || echo "NOTIFY=ntfy needs NTFY_TOPIC" ;;
+            pushover) [ -n "$PUSHOVER_TOKEN" ] && [ -n "$PUSHOVER_USER" ] || echo "NOTIFY=pushover needs PUSHOVER_TOKEN and PUSHOVER_USER" ;;
+            webhook) [ -n "$WEBHOOK_URL" ] || echo "NOTIFY=webhook needs WEBHOOK_URL" ;;
+            *) echo "NOTIFY: unknown backend '$b' (gotify, ntfy, pushover, webhook)" ;;
+        esac
+    done
+    case "$WEBHOOK_FORMAT" in json|slack|discord) ;; *) echo "WEBHOOK_FORMAT: unknown '$WEBHOOK_FORMAT' (json, slack, discord)" ;; esac
 }
 
 unmount_disc() {
@@ -70,9 +172,10 @@ eject_disc() {
 
 FAIL_DETAIL=""
 WORK=""
-case "$DEVICE" in --*) UNIT="dvd-backup${DEVICE/--/-}" ;; *) UNIT="dvd-backup@${DEVICE##*/}" ;; esac
+case "$DEVICE" in --*) UNIT="coaster${DEVICE/--/-}" ;; *) UNIT="coaster@${DEVICE##*/}" ;; esac
 on_exit() {
     local rc=$?
+    case "$DEVICE" in --check|--test-notify) return ;; *) ;; esac
     unmount_disc
     # Failed while reading the disc (before the rip finished): the disc is unreadable —
     # eject it and drop the partial copy; there is nothing to resume.
@@ -88,7 +191,7 @@ on_exit() {
     if [ "$rc" -ne 0 ]; then
         log "FAILED (exit $rc)"
         notify 8 "Disc backup failed ($(hostname -s))" \
-            "Disc '$LABEL' failed during step: $STEP (exit $rc).${FAIL_DETAIL:+ $FAIL_DETAIL} Work dir kept. Fix the cause, then: systemctl start dvd-backup-resume (journalctl -u $UNIT)"
+            "Disc '$LABEL' failed during step: $STEP (exit $rc).${FAIL_DETAIL:+ $FAIL_DETAIL} Work dir kept. Fix the cause, then: systemctl start coaster-resume (journalctl -u $UNIT)"
     fi
 }
 trap on_exit EXIT
@@ -97,8 +200,9 @@ trap on_exit EXIT
 # permission: albumAsset.create") and puts it in the failure notification.
 immich() {  # immich <method> <path> [curl args...]
     local method="$1" path="$2" out code body; shift 2
-    out="$(curl -sS -m 3600 -w '\n%{http_code}' -X "$method" -H "x-api-key: $IMMICH_API_KEY" \
-        -H "Accept: application/json" "$@" "$IMMICH_URL/api$path")"
+    out="$(curl -sS -m 3600 -w '\n%{http_code}' -X "$method" -K <(curl_cfg header "x-api-key: $IMMICH_API_KEY") \
+        -H "Accept: application/json" "$@" "$IMMICH_URL/api$path")" \
+        || { FAIL_DETAIL="Immich $method $path: no connection to $IMMICH_URL"; log "$FAIL_DETAIL"; return 7; }
     code="${out##*$'\n'}"; body="${out%$'\n'*}"
     if [ "$code" -ge 400 ]; then
         FAIL_DETAIL="Immich $method $path → HTTP $code: $(jq -r '.message // .' <<<"$body" 2>/dev/null | head -c 200)"
@@ -144,11 +248,38 @@ album_add() {  # album_add <album name> <id>...
     ALBUM_URL="$IMMICH_URL/albums/$album_id"
 }
 
-# Convert → upload → album → cleanup for one work dir. Needs WORK, FP, LABEL, DATE_ISO,
-# DATE_DAY (set by the disc flow, or read back from $WORK/meta.env by --resume).
+# DESTINATION=path: the disc's folder, "SAVE_DIR/<date> <label>" (" (2)", … if taken by
+# another disc). Chosen once and remembered in $WORK/save_dir, so a resume reuses it.
+# SAVE_DIR itself must exist — creating it could write onto an unmounted mount point.
+save_dir() {
+    local base i=2
+    if [ -f "$WORK/save_dir" ]; then SAVE_TO="$(cat "$WORK/save_dir")"; return; fi
+    if [ ! -d "$SAVE_DIR" ]; then
+        FAIL_DETAIL="SAVE_DIR $SAVE_DIR does not exist (not mounted?)"; log "$FAIL_DETAIL"; return 3
+    fi
+    base="$SAVE_DIR/$DATE_DAY $LABEL"; SAVE_TO="$base"
+    while [ -e "$SAVE_TO" ]; do SAVE_TO="$base ($i)"; i=$((i + 1)); done
+    mkdir "$SAVE_TO"
+    printf '%s\n' "$SAVE_TO" >"$WORK/save_dir"
+}
+
+# Copy one file into the disc's folder. Files appear under their final name only when
+# complete (.part + rename), so an existing one was saved by an earlier, interrupted run.
+save_file() {  # save_file <file> <dest> [ISO date for mtime]
+    local f="$1" dst="$2"
+    [ -f "$dst" ] && return 0
+    mkdir -p "$(dirname "$dst")"
+    cp --reflink=auto --preserve=timestamps "$f" "$dst.part"
+    [ -z "${3:-}" ] || touch -d "$3" "$dst.part"
+    mv "$dst.part" "$dst"
+    log "  saved ${dst#"$SAVE_TO/"}"
+}
+
+# Convert → save/upload → album → cleanup for one work dir. Needs WORK, FP, LABEL,
+# DATE_ISO, DATE_DAY (set by the disc flow, or read back from $WORK/meta.env by --resume).
 process_work() {
-    local mkv mp4 venc t0 n f rel date summary="" vids=0 photos=0 total=0
-    local -a video_ids=()
+    local mkv mp4 venc t0 n f summary="" vids=0 photos=0 total=0 i
+    local -a vid_src=() vid_name=() pho_src=() video_ids=()
 
     # ── Convert DVD-Video titles ─────────────────────────────────────────────────
     # H.264 High + AAC in MP4 (faststart): plays natively in Immich and every browser.
@@ -185,32 +316,47 @@ process_work() {
         return 0
     fi
 
-    # ── Videos → IMMICH_ALBUM ────────────────────────────────────────────────────
-    STEP="upload"
     for mp4 in "$WORK"/title_*.mp4; do
         [ -f "$mp4" ] || continue
         n="$(basename "$mp4" .mp4)"; n="${n#title_}"
         total="$(awk -v a="$total" -v b="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mp4")" \
             'BEGIN{printf "%d", a+b}')"
-        upload "$mp4" "${LABEL} ${DATE_DAY} t${n}.mp4" "$DATE_ISO"
+        vid_src+=("$mp4"); vid_name+=("${LABEL} ${DATE_DAY} t${n}.mp4")
     done
-    video_ids=("${UPLOADED_IDS[@]}"); vids=${#video_ids[@]}
-    if [ "$vids" -gt 0 ]; then
-        STEP="album"; album_add "$IMMICH_ALBUM" "${video_ids[@]}"
-        summary="$vids video(s), $((total / 60)) min → '$IMMICH_ALBUM' $ALBUM_URL"
+    [ ! -d "$WORK/files" ] || mapfile -d '' pho_src < <(find "$WORK/files" -type f -print0 | sort -z)
+    vids=${#vid_src[@]}; photos=${#pho_src[@]}
+
+    # ── Save to SAVE_DIR/<date> <label>/ (videos on top, data-disc files in their
+    #    folder structure from the disc, mtimes kept) ───────────────────────────────
+    if want path; then
+        STEP="save"
+        save_dir
+        for i in "${!vid_src[@]}"; do save_file "${vid_src[i]}" "$SAVE_TO/${vid_name[i]}" "$DATE_ISO"; done
+        for f in "${pho_src[@]}"; do save_file "$f" "$SAVE_TO/${f#"$WORK/files/"}"; done
+        [ -z "$SAVE_OWNER" ] || chown -R "$SAVE_OWNER" "$SAVE_TO"
+        summary="$( [ "$vids" -eq 0 ] || printf '%s video(s), %s min, ' "$vids" "$((total / 60))"
+                    [ "$photos" -eq 0 ] || printf '%s photo/video file(s), ' "$photos")"
+        summary="${summary%, } → $SAVE_TO"
     fi
 
-    # ── Photos/videos copied off a data disc → IMMICH_PHOTO_ALBUM (originals) ────
-    # Date = file mtime on the disc; Immich prefers EXIF DateTimeOriginal when present.
-    STEP="upload"
-    UPLOADED_IDS=()
-    if [ -d "$WORK/files" ]; then
-        while IFS= read -r -d '' f; do
-            rel="${f#"$WORK/files/"}"
-            date="$(date -u -d "@$(stat -c %Y "$f")" +%Y-%m-%dT%H:%M:%S.000Z)"
-            upload "$f" "$(basename "$rel")" "$date"
-        done < <(find "$WORK/files" -type f -print0 | sort -z)
-        photos=${#UPLOADED_IDS[@]}
+    if want immich; then
+        # ── Videos → IMMICH_ALBUM ────────────────────────────────────────────────
+        STEP="upload"
+        UPLOADED_IDS=()
+        for i in "${!vid_src[@]}"; do upload "${vid_src[i]}" "${vid_name[i]}" "$DATE_ISO"; done
+        video_ids=("${UPLOADED_IDS[@]}")
+        if [ "$vids" -gt 0 ]; then
+            STEP="album"; album_add "$IMMICH_ALBUM" "${video_ids[@]}"
+            summary="${summary:+$summary; }$vids video(s), $((total / 60)) min → '$IMMICH_ALBUM' $ALBUM_URL"
+        fi
+
+        # ── Photos/videos copied off a data disc → IMMICH_PHOTO_ALBUM (originals) ─
+        # Date = file mtime on the disc; Immich prefers EXIF DateTimeOriginal when present.
+        STEP="upload"
+        UPLOADED_IDS=()
+        for f in "${pho_src[@]}"; do
+            upload "$f" "$(basename "$f")" "$(date -u -d "@$(stat -c %Y "$f")" +%Y-%m-%dT%H:%M:%S.000Z)"
+        done
         if [ "$photos" -gt 0 ]; then
             STEP="album"; album_add "$IMMICH_PHOTO_ALBUM" "${UPLOADED_IDS[@]}"
             summary="${summary:+$summary; }$photos photo/video file(s) → '$IMMICH_PHOTO_ALBUM' $ALBUM_URL"
@@ -222,10 +368,10 @@ process_work() {
     echo "$FP" >>"$LEDGER"
     rm -rf --one-file-system "$WORK"
     log "done: $summary"
-    notify 5 "Disc backed up to Immich" "Disc '$LABEL' ($DATE_DAY): $summary"
+    notify 5 "Disc backed up" "Disc '$LABEL' ($DATE_DAY): $summary"
 }
 
-# ── Watch mode (dvd-backup-watch.service) ────────────────────────────────────────
+# ── Watch mode (coaster-watch.service) ────────────────────────────────────────
 # A badly damaged disc can hang the drive before this script ever starts: udev's own
 # filesystem probe blocks, the drive times out, resets, and the kernel takes it offline,
 # so no "disc inserted" event ever arrives. Follow the kernel log for those signs and
@@ -252,6 +398,7 @@ if [ "$DEVICE" = --watch ]; then
             "usb "*": reset "*)
                 port="$(cut -d' ' -f2 <<<"$line")"; port="${port%:}"
                 dev="$(optical_usb_ports | awk -v p="$port" '$2 == p {print "/dev/" $1; exit}')" ;;
+            *) ;;
         esac
         [ -n "$dev" ] || continue
         [ $((SECONDS - last)) -ge 600 ] || continue   # one alert per incident
@@ -268,9 +415,47 @@ if [ "$DEVICE" = --watch ]; then
     exit 0
 fi
 
+# ── Test modes (setup.sh runs these) ─────────────────────────────────────────────
+if [ "$DEVICE" = --test-notify ]; then
+    STEP="test-notify"
+    [ "${#NOTIFY_TO[@]}" -gt 0 ] || { log "no notification backend configured (NOTIFY=$NOTIFY)"; exit 1; }
+    notify 5 "coaster test ($(hostname -s))" "Test notification from coaster $VERSION via ${NOTIFY_TO[*]}."
+    [ "$NOTIFY_FAILED" = 0 ] && log "sent via ${NOTIFY_TO[*]}"
+    exit "$NOTIFY_FAILED"
+fi
+if [ "$DEVICE" = --check ]; then
+    STEP="check"
+    problems="$(config_errors)"
+    [ -z "$problems" ] || { while IFS= read -r p; do log "config: $p"; done <<<"$problems"; exit 2; }
+    ok=1
+    if want immich; then
+        if albums="$(immich GET /albums)"; then
+            log "Immich OK: $IMMICH_URL ($(jq length <<<"$albums") albums visible to the key)"
+        else
+            log "Immich check failed (see above)"; ok=0
+        fi
+    fi
+    if want path; then
+        if [ -d "$SAVE_DIR" ] && t="$(mktemp -p "$SAVE_DIR" .coaster-check.XXXXXX)" && rm -f "$t"; then
+            log "SAVE_DIR OK: $SAVE_DIR (writable, $(df -h --output=avail "$SAVE_DIR" | tail -n1 | tr -d ' ') free)"
+        else
+            log "SAVE_DIR not writable or missing: $SAVE_DIR"; ok=0
+        fi
+    fi
+    log "destination: $DESTINATION; notifications: ${NOTIFY_TO[*]:-none}"
+    exit $((1 - ok))
+fi
+
+problems="$(config_errors)"
+if [ -n "$problems" ]; then
+    while IFS= read -r p; do log "config: $p"; done <<<"$problems"
+    FAIL_DETAIL="Config error: $(tr '\n' ';' <<<"$problems") (/etc/coaster/env)"
+    exit 2
+fi
+
 # ── Resume mode (no disc needed) ─────────────────────────────────────────────────
 # Finish work dirs left by a failed run once the cause is fixed (e.g. API key
-# permissions), without re-inserting the disc:  dvd-backup.sh --resume
+# permissions), without re-inserting the disc:  coaster --resume
 if [ "$DEVICE" = --resume ]; then
     mkdir -p "$RUN_DIR" "$STATE_DIR"
     exec 9>"$RUN_DIR/lock"
@@ -344,7 +529,7 @@ if [ -z "$VIDEO_TS" ] && [ "${#MEDIA_FILES[@]}" -eq 0 ]; then
     exit 0
 fi
 
-# Fingerprint → ledger skips discs already uploaded without a rip + encode (Immich's
+# Fingerprint → ledger skips discs already backed up without a rip + encode (Immich's
 # checksum dedupe only catches a repeat after that work). School discs from the same
 # authoring tool share a label and can have near-identical IFOs, so besides label + IFO
 # contents hash every file's name, size and mtime (directory metadata only — no VOB
@@ -354,9 +539,9 @@ FP="$( { printf 'v2 %s\n' "$LABEL"
         [ -z "$VIDEO_TS" ] || find "$VIDEO_TS" -maxdepth 1 -iname '*.IFO' -type f -print0 | sort -z | xargs -0 -r cat
         find "$MNT" -type f -printf '%P %s %T@\n' | LC_ALL=C sort; } | sha256sum | cut -c1-16)"
 if grep -qxF "$FP" "$LEDGER" 2>/dev/null; then
-    log "disc $LABEL ($FP) already uploaded — ejecting"
+    log "disc $LABEL ($FP) already backed up — ejecting"
     eject_disc
-    notify 3 "Disc already backed up" "Disc '$LABEL' was already uploaded to Immich; ejected."
+    notify 3 "Disc already backed up" "Disc '$LABEL' was already backed up; ejected."
     exit 0
 fi
 
