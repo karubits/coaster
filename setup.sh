@@ -10,9 +10,11 @@
 #   ./setup.sh --test-notify   send a test notification
 #   ./setup.sh --uninstall [--purge]   remove coaster (--purge: also config + state)
 #
-# Other options: --install-deps (install missing packages without asking), --libdvdcss (install libdvdcss
-# for copy-protected DVDs — check your local law first, see README), --force (allow a
-# downgrade), --yes (never ask; a first install then needs /etc/coaster/env edited by hand).
+# Other options: --install-deps (install missing packages without asking), --libdvdcss (install
+# libdvdcss for copy-protected DVDs — check your local law first, see README), --enable-repos
+# (allow enabling a needed package repository — Debian contrib, Ubuntu multiverse, RPM Fusion —
+# without asking; otherwise it's shown and asked first), --force (allow a downgrade), --yes
+# (never ask; a first install then needs /etc/coaster/env edited by hand).
 # An install under the old name (dvd-backup) is migrated: config, ledger and unfinished work
 # move to /etc/coaster and /var/lib/coaster, the old units are removed.
 set -euo pipefail
@@ -27,7 +29,7 @@ ENV_FILE="$CONF_DIR/env"
 STATE_DIR=/var/lib/coaster
 LOG=/var/log/coaster-setup.log
 
-PULL=0 CONFIGURE=0 TEST_NOTIFY=0 UNINSTALL=0 PURGE=0 DEPS=0 LIBDVDCSS=0 FORCE=0 YES=0
+PULL=0 CONFIGURE=0 TEST_NOTIFY=0 UNINSTALL=0 PURGE=0 DEPS=0 LIBDVDCSS=0 ENABLE_REPOS=0 FORCE=0 YES=0
 ARGS=()   # everything but --pull, for the re-exec after a pull / sudo
 for a in "$@"; do
     case "$a" in
@@ -38,6 +40,7 @@ for a in "$@"; do
         --purge) PURGE=1 ;;
         --install-deps) DEPS=1 ;;
         --libdvdcss) LIBDVDCSS=1 ;;
+        --enable-repos) ENABLE_REPOS=1 ;;
         --force) FORCE=1 ;;
         -y|--yes) YES=1 ;;
         -h|--help) sed -n '2,/^set -e/{/^set -e/d;s/^# \{0,1\}//;p}' "$0"; exit 0 ;;
@@ -178,6 +181,79 @@ say "── coaster setup ($(date '+%F %T'), from $REPO)"
 # ── Dependencies ─────────────────────────────────────────────────────────────────
 pm=""
 for c in apt-get dnf pacman zypper; do command -v "$c" >/dev/null && { pm="$c"; break; }; done
+# shellcheck source=/dev/null
+os_id="$( (. /etc/os-release 2>/dev/null; echo "${ID:-} ${ID_LIKE:-}") )"
+
+# ── Package repositories ─────────────────────────────────────────────────────────
+# Some packages live in repositories that aren't enabled by default (Debian contrib, Ubuntu
+# multiverse, RPM Fusion). Enabling one changes the system's package sources, so it's only
+# done after showing exactly what changes and an explicit yes (or --enable-repos).
+confirm_repo() {  # confirm_repo <repository> <what changes> <what it is / why>
+    printf '\n── Package repository change needed ──\n  repository: %s\n  change:     %s\n  about:      %s\n' "$1" "$2" "$3"
+    if [ "$ENABLE_REPOS" = 1 ]; then say "enabling $1 (--enable-repos)"; return 0; fi
+    if [ "$INTERACTIVE" = 0 ]; then
+        warn "not enabling $1 without confirmation — re-run interactively, or with --enable-repos"
+        return 1
+    fi
+    ask ok "Enable $1? (y/N)"
+    [[ "$ok" =~ ^[yY] ]]
+}
+
+# Add an apt component (contrib / multiverse) next to "main" — official Debian/Ubuntu sources
+# only, so third-party repos that also use "main" stay untouched. Backups: <file>.coaster-bak
+APT_OFFICIAL='(deb|security|ftp[^/]*)\.debian\.org|(archive|security|ports)\.ubuntu\.com|mirrors?\.[^/ ]*/(debian|ubuntu)'
+enable_apt_component() {  # enable_apt_component <component> <why> — 1 if declined
+    local comp="$1" f tmp diffs="" ; local -a files=()
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] || continue
+        tmp="$(mktemp)"
+        if [[ "$f" == *.sources ]]; then   # deb822: stanzas separated by blank lines
+            C="$comp" R="$APT_OFFICIAL" awk '
+                function flush(  i, l) {
+                    for (i = 1; i <= n; i++) {
+                        l = buf[i]
+                        if (off && l ~ /^Components:/ && l ~ /[ \t]main([ \t]|$)/ && l !~ ("[ \t]" ENVIRON["C"] "([ \t]|$)")) l = l " " ENVIRON["C"]
+                        print l
+                    }
+                    n = 0; off = 0
+                }
+                /^[ \t]*$/ { flush(); print; next }
+                { buf[++n] = $0; if ($0 ~ /^URIs:/ && $0 ~ ENVIRON["R"]) off = 1 }
+                END { flush() }' "$f" >"$tmp"
+        else                               # one-line format
+            C="$comp" R="$APT_OFFICIAL" awk '
+                /^deb(-src)?[ \t]/ && $0 ~ ENVIRON["R"] && $0 ~ /[ \t]main([ \t]|$)/ && $0 !~ ("[ \t]" ENVIRON["C"] "([ \t]|$)") { print $0 " " ENVIRON["C"]; next }
+                { print }' "$f" >"$tmp"
+        fi
+        if cmp -s "$f" "$tmp"; then rm -f "$tmp"; else files+=("$f"); diffs+="$(diff -u "$f" "$tmp" | sed '1,2d')"$'\n'; mv "$tmp" "$f.coaster-new"; fi
+    done
+    if [ "${#files[@]}" -eq 0 ]; then
+        warn "no official Debian/Ubuntu apt source to add '$comp' to — add it by hand"; return 1
+    fi
+    if ! confirm_repo "$comp" "adds '$comp' to ${files[*]} (backup: <file>.coaster-bak):
+$diffs" "$2"; then
+        for f in "${files[@]}"; do rm -f "$f.coaster-new"; done
+        return 1
+    fi
+    for f in "${files[@]}"; do
+        cp -p "$f" "$f.coaster-bak"; chmod --reference="$f" "$f.coaster-new"; mv -f "$f.coaster-new" "$f"
+        say "  enabled '$comp' in $f (backup: $f.coaster-bak)"
+    done
+    apt-get update -qq
+}
+
+enable_rpmfusion() {  # enable_rpmfusion [tainted] — 1 if declined
+    local -a want=()
+    rpm -q rpmfusion-free-release >/dev/null 2>&1 \
+        || want+=("https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm")
+    [ "${1:-}" != tainted ] || rpm -q rpmfusion-free-release-tainted >/dev/null 2>&1 || want+=(rpmfusion-free-release-tainted)
+    [ "${#want[@]}" -gt 0 ] || return 0
+    confirm_repo "RPM Fusion free${1:+ + $1}" "dnf install ${want[*]} (adds /etc/yum.repos.d/rpmfusion-free*.repo)" \
+        "community repository for software Fedora doesn't ship (full ffmpeg${1:+, libdvdcss}); https://rpmfusion.org" \
+        || return 1
+    dnf install -y "${want[@]}"
+}
+
 for c in systemctl udevadm journalctl systemd-run; do
     command -v "$c" >/dev/null || die "$c not found — coaster needs systemd and udev"
 done
@@ -204,8 +280,12 @@ if [ "${#pkgs[@]}" -gt 0 ]; then
     if [ "$DEPS" = 0 ] && [ "$INTERACTIVE" = 1 ] && [ "${#cmd[@]}" -gt 0 ]; then
         echo "coaster needs these packages: ${pkgs[*]}"
         echo "  install command: $hint"
-        ask ok "Install them now? (y/N)" n
+        ask ok "Install them now? (y/N)"
         [[ ! "$ok" =~ ^[yY] ]] || DEPS=1
+    fi
+    if [ "$DEPS" = 1 ] && [ "$pm" = dnf ] && [[ " ${pkgs[*]} " == *" ffmpeg "* ]] \
+        && ! rpm -q rpmfusion-free-release >/dev/null 2>&1 && ! enable_rpmfusion; then
+        DEPS=0   # Fedora's own ffmpeg-free lacks the H.264 encoder coaster uses
     fi
     if [ "$DEPS" = 1 ] && [ "${#cmd[@]}" -gt 0 ]; then
         say "installing: ${pkgs[*]}"; "${cmd[@]}"
@@ -230,22 +310,26 @@ if [ "$LIBDVDCSS" = 1 ]; then
         case "$pm" in
             apt-get)   # libdvd-pkg (Debian contrib / Ubuntu multiverse) builds it from VideoLAN's source
                 apt-get update -qq || true
-                apt-cache policy libdvd-pkg | grep -E 'Candidate: [0-9]' >/dev/null \
-                    || die "libdvd-pkg not available — enable 'contrib' (Debian) or 'multiverse' (Ubuntu) in your apt sources, then re-run"
+                if ! apt-cache policy libdvd-pkg | grep -E 'Candidate: [0-9]' >/dev/null; then
+                    comp=contrib; [[ " $os_id " != *" ubuntu "* ]] || comp=multiverse
+                    enable_apt_component "$comp" "libdvd-pkg is in '$comp': packages that are free software but depend on non-free downloads (here: libdvdcss from VideoLAN)" \
+                        || { warn "libdvdcss not installed: libdvd-pkg needs the '$comp' repository component"; dvdcss_skip=1; }
+                fi
+                [ -n "${dvdcss_skip:-}" ] || {
                 printf '%s\n' 'libdvd-pkg libdvd-pkg/build boolean true' \
                     'libdvd-pkg libdvd-pkg/post-invoke_hook-install boolean true' | debconf-set-selections
                 DEBIAN_FRONTEND=noninteractive apt-get install -y libdvd-pkg
-                DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive libdvd-pkg ;;
+                DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive libdvd-pkg; } ;;
             dnf)       # RPM Fusion free + tainted
-                rpm -q rpmfusion-free-release >/dev/null \
-                    || die "enable RPM Fusion free first: https://rpmfusion.org/Configuration"
-                rpm -q rpmfusion-free-release-tainted >/dev/null || dnf install -y rpmfusion-free-release-tainted
-                dnf install -y libdvdcss ;;
+                if enable_rpmfusion tainted; then dnf install -y libdvdcss
+                else warn "libdvdcss not installed: it needs RPM Fusion free tainted"; dvdcss_skip=1; fi ;;
             pacman) pacman -S --needed --noconfirm libdvdcss ;;
             *) die "install libdvdcss with your package manager (openSUSE: libdvdcss2 from the VideoLAN repo)" ;;
         esac
-        has_dvdcss || die "libdvdcss still not found after installing"
-        say "libdvdcss installed"
+        if [ -z "${dvdcss_skip:-}" ]; then
+            has_dvdcss || die "libdvdcss still not found after installing"
+            say "libdvdcss installed"
+        fi
     fi
 fi
 

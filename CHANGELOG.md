@@ -3,6 +3,15 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. Versions follow
 [Semantic Versioning](https://semver.org); each one is a git tag `vX.Y.Z` (and a release).
 
+## [0.4.4] - 2026-10-18
+
+### Added
+- `setup.sh` can enable a package repository a package needs (Debian `contrib` / Ubuntu
+  `multiverse` for libdvdcss, RPM Fusion for Fedora's ffmpeg and libdvdcss). It shows what
+  changes (for apt the exact diff; only official Debian/Ubuntu sources are touched, backups as
+  `*.coaster-bak`) and asks; Enter means no. Declining skips that package with a warning.
+  `--enable-repos` allows it in unattended runs.
+
 ## [0.4.3] - 2026-10-18
 
 ### Fixed
@@ -115,6 +124,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. 
 - udev-triggered DVD rip → H.264/AAC MP4 → Immich upload, `--resume` mode and
   `dvd-backup-resume.service`.
 
+[0.4.4]: https://github.com/Karubits/coaster/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Karubits/coaster/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Karubits/coaster/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Karubits/coaster/compare/v0.4.0...v0.4.1

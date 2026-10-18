@@ -53,8 +53,9 @@ git clone https://github.com/Karubits/coaster.git && cd coaster
 The script asks for sudo and walks you through it:
 
 1. lists the packages it's missing and installs them only if you say yes (apt, dnf, pacman or
-   zypper — Fedora needs [RPM Fusion](https://rpmfusion.org/Configuration) for ffmpeg). Say no
-   and it carries on, but warns: coaster won't run until they're installed,
+   zypper). Say no and it carries on, but warns: coaster won't run until they're installed.
+   If a package needs a repository that isn't enabled (Fedora: RPM Fusion for ffmpeg), it
+   shows exactly what would change and asks first; nothing is changed without a yes,
 2. installs coaster and asks where backups go (Immich URL + API key, and/or a folder) and how
    to notify you,
 3. checks the config, offers a test notification and starts watching the drive.
@@ -72,6 +73,7 @@ settings are kept; new ones are added to `/etc/coaster/env` commented out (see t
 | `--test-notify` | send a test notification |
 | `--install-deps` | install missing packages without asking |
 | `--libdvdcss` | install libdvdcss for [copy-protected DVDs](#copy-protected-commercial-dvds) |
+| `--enable-repos` | allow enabling a needed package repository without asking (for unattended runs) |
 | `--yes` | never ask (unattended; set up `/etc/coaster/env` yourself) |
 | `--uninstall [--purge]` | remove coaster; `--purge` also deletes settings and history |
 
@@ -128,7 +130,8 @@ copy-protected and need nothing extra. Commercial movie DVDs use CSS encryption,
 them needs **libdvdcss**. **Circumventing CSS is restricted or illegal in many countries** —
 e.g. the US (DMCA), much of the EU, and Japan (since 2012, even for private copies). coaster
 doesn't install it unless you ask: only run `./setup.sh --libdvdcss` where that's lawful for
-your use.
+your use. On Debian/Ubuntu it comes from the `contrib`/`multiverse` repository component, on
+Fedora from RPM Fusion tainted; if that isn't enabled yet, setup shows the change and asks.
 
 ## How it works
 
