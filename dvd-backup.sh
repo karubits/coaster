@@ -260,6 +260,7 @@ if [ "$DEVICE" = --watch ]; then
         else
             msg="The disc in $dev can't be read (drive timed out / reset). Eject failed — press the drive's eject button or re-plug its USB cable."
         fi
+        log "$msg"
         notify 8 "Disc can't be read ($(hostname -s))" "$msg"
     done
     exit 0
