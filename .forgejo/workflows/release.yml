@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       commit:
-        description: Commit to release (default: the tip of the branch you run this on)
+        description: "Commit to release (default: the tip of the branch you run this on)"
         required: false
 jobs:
   release:
