@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Static checks, the same locally and in CI:
 #   • shellcheck on every shell script (default checks + the optional ones in .shellcheckrc)
+#   • VERSION in coaster.sh matches the newest CHANGELOG entry
 #   • systemd-analyze verify on the units (syntax, ExecStart, dependencies)
 #   • systemd-analyze security: fail if a unit's exposure score rises above MAX_EXPOSURE
 #     (0–10; mount/eject need root, so a few points stay)
@@ -13,6 +14,14 @@ cd "$REPO"
 
 echo "── shellcheck $(shellcheck --version | sed -n 's/^version: //p')"
 shellcheck coaster.sh setup.sh tests/*.sh
+
+echo "── version"
+version="$(sed -n 's/^VERSION=//p' coaster.sh)"
+changelog="$(sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/p' CHANGELOG.md | head -n1)"
+if [ "$version" != "$changelog" ]; then
+    echo "coaster.sh VERSION=$version but the newest CHANGELOG entry is $changelog"; exit 1
+fi
+echo "$version"
 
 echo "── systemd-analyze verify"
 root="$(mktemp -d)"

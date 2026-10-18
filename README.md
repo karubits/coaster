@@ -243,6 +243,11 @@ secret scan of the whole history. The units are hardened as far as mounting and 
 allow (`ProtectSystem=strict`, private mounts, no new privileges, restricted namespaces and
 address families, …); see `systemd-analyze security coaster@sr0`.
 
+**Releases:** [Semantic Versioning](https://semver.org). To release: bump `VERSION` in
+`coaster.sh`, add a `## [X.Y.Z] - date` section to [CHANGELOG.md](CHANGELOG.md) (lint checks
+they match), commit, `git tag -a vX.Y.Z -m vX.Y.Z && git push --follow-tags`. `setup.sh` shows
+the version change on update and refuses downgrades.
+
 Security issues: see [SECURITY.md](SECURITY.md).
 
 ## License
