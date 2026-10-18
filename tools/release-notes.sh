@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Print the CHANGELOG section for a release tag, after checking the tag, VERSION in
 # coaster.sh and the CHANGELOG agree. Used by the release workflows.
-#   Usage: tools/release-notes.sh vX.Y.Z
+#   Usage: tools/release-notes.sh vX.Y.Z [checkout of that tag, default: this repo]
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-tag="${1:?usage: $0 vX.Y.Z}"
+tag="${1:?usage: $0 vX.Y.Z [dir]}"
+cd "${2:-$(dirname "$0")/..}"
 [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "not a release tag: $tag" >&2; exit 1; }
 version="${BASH_REMATCH[1]}"
 script_version="$(sed -n 's/^VERSION=//p' coaster.sh)"

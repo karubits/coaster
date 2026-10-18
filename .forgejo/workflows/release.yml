@@ -1,22 +1,33 @@
-# Tag vX.Y.Z pushed → Forgejo release with that version's CHANGELOG section as notes.
-# tools/release-notes.sh refuses a tag that doesn't match VERSION in coaster.sh / CHANGELOG.
+# Tag vX.Y.Z pushed → Forgejo release with that version's CHANGELOG section as notes,
+# published by the Actions bot. tools/release-notes.sh refuses a tag that doesn't match
+# VERSION in coaster.sh / CHANGELOG. Run it by hand (workflow_dispatch) to (re)create the
+# release of an existing tag (delete the old release first) — the notes come from that tag.
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag, e.g. v0.4.1
+        required: true
 jobs:
   release:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4   # the tagged tree (older tags may predate tools/)
+        with:
+          ref: ${{ inputs.tag || forgejo.ref }}
+          path: tagged
       - name: Create the release
         env:
           TOKEN: ${{ forgejo.token }}
-          TAG: ${{ forgejo.ref_name }}
+          TAG: ${{ inputs.tag || forgejo.ref_name }}
           API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}/releases
         run: |
           apt-get update -qq && apt-get install -y -qq jq >/dev/null
-          notes="$(tools/release-notes.sh "$TAG")"
+          notes="$(tools/release-notes.sh "$TAG" tagged)"
           if curl -fsS -o /dev/null -H "Authorization: token $TOKEN" "$API/tags/$TAG"; then
             echo "release $TAG already exists"
           else
