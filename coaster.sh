@@ -21,7 +21,7 @@ set -euo pipefail
 # systemd starts us without a locale; labels/file names are UTF-8 (Japanese discs).
 export LC_ALL=C.UTF-8
 
-VERSION=0.4.1
+VERSION=0.4.2
 DEVICE="${1:-/dev/sr0}"   # or --resume | --watch | --check | --test-notify | --version
 [ "$DEVICE" = --version ] && { echo "coaster $VERSION"; exit 0; }
 
@@ -139,7 +139,10 @@ notify() {  # notify <priority> <title> <message>
 
 # Config problems, one per line (empty = OK).
 config_errors() {
-    local d b
+    local d b c
+    for c in ffmpeg ffprobe curl jq eject flock mountpoint blockdev udevadm; do
+        command -v "$c" >/dev/null || echo "missing program: $c (install it, e.g. via ./setup.sh)"
+    done
     [ -n "$DESTINATION" ] || echo "DESTINATION is empty (immich, path or both)"
     for d in $DESTINATION; do
         case "$d" in immich|path) ;; *) echo "DESTINATION: unknown '$d' (immich, path)" ;; esac

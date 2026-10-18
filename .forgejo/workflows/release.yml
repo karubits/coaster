@@ -1,8 +1,10 @@
 # Release (run by hand: Actions → release → Run workflow). Tags the commit as v<VERSION from
-# coaster.sh> — annotated, tagger "Karubits <karubits@proton.me>" — pushes the tag with the
-# Actions token and publishes the release with that version's CHANGELOG section as notes, so
-# the Forgejo release and tag belong to the Actions bot, not to a personal account. Don't push
-# release tags by hand. tools/release-notes.sh refuses a version without a CHANGELOG section.
+# coaster.sh> — annotated, tagger "Karubits <karubits@proton.me>" — pushes the tag and
+# publishes the release with that version's CHANGELOG section as notes.
+# Forgejo shows the token's account as the release author: set the repo secret RELEASE_TOKEN
+# (a token of a bot account with repository write) to publish as that account; without it the
+# built-in token is used, which acts as whoever started the run. Don't push release tags by
+# hand (the pusher becomes the author). tools/release-notes.sh refuses a version without a CHANGELOG section.
 # The GitHub mirror receives the tag and runs .github/workflows/release.yml.
 name: release
 on:
@@ -21,9 +23,10 @@ jobs:
           ref: ${{ inputs.commit || forgejo.sha }}
           path: tagged
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || forgejo.token }}   # pushes the tag
       - name: Tag and release
         env:
-          TOKEN: ${{ forgejo.token }}
+          TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
           API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}/releases
         run: |
           apt-get update -qq && apt-get install -y -qq jq >/dev/null

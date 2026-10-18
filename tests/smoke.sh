@@ -65,6 +65,16 @@ check "API key with quotes/backslash reaches Immich intact (curl config quoting)
 run --check IMMICH_URL=http://127.0.0.1:1
 check "--check fails when Immich is unreachable" test "$rc" = 1
 
+# A PATH with every program except ffmpeg
+mkdir -p "$T/no-ffmpeg"
+for f in /usr/bin/* /bin/*; do
+    case "${f##*/}" in ffmpeg) ;; *) ln -sf "$f" "$T/no-ffmpeg/" 2>/dev/null || true ;; esac
+done
+rc=0
+env -i PATH="$T/no-ffmpeg" IMMICH_URL="$M/" IMMICH_API_KEY=key bash "$BIN" --check >"$T/out" 2>&1 || rc=$?
+check "--check reports a missing program (exit 2)" test "$rc" = 2
+check "  names it" grep -q 'missing program: ffmpeg' "$T/out"
+
 echo "── notifications"
 : >"$LOG"
 run --test-notify NOTIFY=gotify,ntfy,pushover,webhook GOTIFY_URL="$M" GOTIFY_TOKEN=gt \

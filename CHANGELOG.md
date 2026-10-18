@@ -3,6 +3,19 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. Versions follow
 [Semantic Versioning](https://semver.org); each one is a git tag `vX.Y.Z` (and a release).
 
+## [0.4.2] - 2026-10-18
+
+### Changed
+- `setup.sh` lists missing packages with the install command and installs them only after an
+  explicit yes; declining (or `--yes` without `--install-deps`) continues with a warning
+  instead of stopping.
+- coaster checks for the programs it needs and fails with "missing program: …" (log,
+  `--check`, failure notification) instead of a later, unclear error.
+- Releases are created by the release workflow (run by hand), which also makes the tag;
+  optional `RELEASE_TOKEN` secret to publish as a bot account.
+- README reorganised for first-time users: what you need → install → day to day; package
+  lists only under Manual install.
+
 ## [0.4.1] - 2026-10-18
 
 ### Added
@@ -95,6 +108,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. 
 - udev-triggered DVD rip → H.264/AAC MP4 → Immich upload, `--resume` mode and
   `dvd-backup-resume.service`.
 
+[0.4.2]: https://github.com/Karubits/coaster/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Karubits/coaster/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Karubits/coaster/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Karubits/coaster/compare/v0.2.4...v0.3.0

@@ -10,7 +10,7 @@
 #   ./setup.sh --test-notify   send a test notification
 #   ./setup.sh --uninstall [--purge]   remove coaster (--purge: also config + state)
 #
-# Other options: --install-deps (install missing packages), --libdvdcss (install libdvdcss
+# Other options: --install-deps (install missing packages without asking), --libdvdcss (install libdvdcss
 # for copy-protected DVDs — check your local law first, see README), --force (allow a
 # downgrade), --yes (never ask; a first install then needs /etc/coaster/env edited by hand).
 # An install under the old name (dvd-backup) is migrated: config, ledger and unfinished work
@@ -66,6 +66,7 @@ umask 022
 INTERACTIVE=0
 if [ "$YES" = 0 ] && [ -t 0 ] && [ -t 1 ]; then INTERACTIVE=1; fi
 ok="" tk=""   # set by ask()
+MISSING_PKGS=""
 
 say() { printf '%s\n' "$*"; printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; printf '%s WARNING: %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
@@ -197,12 +198,20 @@ if [ "${#pkgs[@]}" -gt 0 ]; then
         dnf) cmd=(dnf install -y "${pkgs[@]}") ;;   # ffmpeg: enable RPM Fusion first
         pacman) cmd=(pacman -S --needed --noconfirm "${pkgs[@]}") ;;
         zypper) cmd=(zypper install -y "${pkgs[@]}") ;;
-        *) die "missing packages: ${pkgs[*]} — install them with your package manager" ;;
+        *) cmd=() ;;
     esac
-    if [ "$DEPS" = 1 ]; then
+    hint="${cmd[*]:-your package manager}"
+    if [ "$DEPS" = 0 ] && [ "$INTERACTIVE" = 1 ] && [ "${#cmd[@]}" -gt 0 ]; then
+        echo "coaster needs these packages: ${pkgs[*]}"
+        echo "  install command: $hint"
+        ask ok "Install them now? (y/N)" n
+        [[ ! "$ok" =~ ^[yY] ]] || DEPS=1
+    fi
+    if [ "$DEPS" = 1 ] && [ "${#cmd[@]}" -gt 0 ]; then
         say "installing: ${pkgs[*]}"; "${cmd[@]}"
-    else
-        die "missing packages: ${pkgs[*]} — run: sudo ${cmd[*]}  (or re-run with --install-deps)"
+    else   # installed anyway; coaster refuses to run (and says why) until they're there
+        MISSING_PKGS="${pkgs[*]}"
+        warn "not installed: $MISSING_PKGS — coaster won't work until you install them ($hint)"
     fi
 fi
 # (not grep -q: it exits at the first match, ffmpeg gets SIGPIPE and pipefail fails the test)
@@ -449,11 +458,13 @@ if run_mode --check; then
         [[ "$ok" =~ ^[nN] ]] || run_mode --test-notify || warn "test notification failed — check the settings above"
     fi
 else
-    warn "config check failed — fix $ENV_FILE (or run: sudo $REPO/setup.sh --configure)"
+    if [ -n "$MISSING_PKGS" ]; then warn "config check failed — missing packages, see below"
+    else warn "config check failed — fix $ENV_FILE (or run: sudo $REPO/setup.sh --configure)"; fi
     check_ok=0
 fi
 pending=0
 [ ! -d "$work" ] || pending="$(find "$work" -mindepth 2 -maxdepth 2 -name rip.done | wc -l)"
 [ "$pending" = 0 ] || say "$pending unfinished backup(s) waiting — run: sudo systemctl start coaster-resume"
+[ -z "$MISSING_PKGS" ] || warn "still missing: $MISSING_PKGS — install them, then re-run ./setup.sh"
 [ "$check_ok" = 1 ] || exit 1
 say "done. Insert a disc and follow: journalctl -fu coaster@sr0   (log: $LOG)"
