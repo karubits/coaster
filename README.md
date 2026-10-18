@@ -1,14 +1,21 @@
 # dvd-backup
 
-Insert a DVD → it is ripped, converted to H.264/AAC MP4, uploaded to [Immich](https://immich.app)
-into one album, and every local leftover is deleted. No interaction.
+Insert a disc → it is backed up to [Immich](https://immich.app) and every local leftover is
+deleted. No interaction.
+
+- **DVD-Video** → each title ripped, converted to H.264/AAC MP4 → album `IMMICH_ALBUM` ("DVD Uploads")
+- **Photo/data CD or DVD** → photos and videos copied off and uploaded as originals (Immich reads
+  EXIF dates) → album `IMMICH_PHOTO_ALBUM` ("Photo Discs")
+- A disc with both (slideshow DVD + JPEG folder) gets both.
+- **Unreadable disc** → Gotify "Disc can't be read" + eject. `dvd-backup-watch.service` catches discs
+  so damaged that the drive hangs before udev even reports them (kernel-log timeouts / drive offline).
 
 Built for school-performance DVDs on `zima` (homelab); deployed by the
 [homelab-playbook](https://git.karubits.com/Karubits/homelab-playbook) (`tasks/dvd_backup.yml`).
 
 ## How it works
 
-1. `udev/99-dvd-backup.rules` — on a DVD media-change event, `systemctl --no-block start dvd-backup@sr0`.
+1. `udev/99-dvd-backup.rules` — on a data-disc media-change event (audio CDs ignored), `systemctl --no-block start dvd-backup@sr0`.
 2. `systemd/dvd-backup@.service` — hardened oneshot running `dvd-backup.sh /dev/sr0`.
 3. `dvd-backup.sh`:
    - mounts the disc read-only, fingerprints it (IFO hash + label) and skips/ejects discs already
@@ -36,10 +43,10 @@ Immich API key permissions: `asset.upload`, `album.read`, `album.create`, `album
 
 ```bash
 install -m 0755 dvd-backup.sh /usr/local/sbin/dvd-backup.sh
-install -m 0644 systemd/dvd-backup@.service systemd/dvd-backup-resume.service /etc/systemd/system/
+install -m 0644 systemd/dvd-backup@.service systemd/dvd-backup-resume.service systemd/dvd-backup-watch.service /etc/systemd/system/
 install -m 0644 udev/99-dvd-backup.rules /etc/udev/rules.d/
 install -d -m 0700 /etc/dvd-backup && install -m 0600 dvd-backup.env.example /etc/dvd-backup/env  # edit it
-systemctl daemon-reload && udevadm control --reload
+systemctl daemon-reload && udevadm control --reload && systemctl enable --now dvd-backup-watch
 ```
 
 ## Usage
