@@ -227,24 +227,38 @@ process_work() {
 # A badly damaged disc can hang the drive before this script ever starts: udev's own
 # filesystem probe blocks, the drive times out, resets, and the kernel takes it offline,
 # so no "disc inserted" event ever arrives. Follow the kernel log for those signs and
-# alert + try to eject. Ignores the instant "Illegal mode for this track" read error every
-# healthy CD-R gives at its run-out blocks.
+# alert + try to eject. Signs: SCSI read timeouts / device offline on sr*, or a USB reset
+# of the port an optical drive hangs off (sometimes the only trace — the drive then just
+# reports "No medium"). Ignores the instant "Illegal mode for this track" read error
+# every healthy CD-R gives at its run-out blocks.
+optical_usb_ports() {  # "sr0 2-3" per USB-attached optical drive
+    local d port
+    for d in /sys/block/sr*; do
+        [ -e "$d" ] || continue
+        port="$(readlink -f "$d/device" | grep -oE '/usb[0-9]+/[0-9]+-[0-9.]+/' | cut -d/ -f3)"
+        [ -n "$port" ] && echo "${d##*/} $port"
+    done
+}
 if [ "$DEVICE" = --watch ]; then
     STEP="watch"
     last=0
     journalctl -k -f -n 0 -o cat | while IFS= read -r line; do
+        dev=""
         case "$line" in
-            *"sr"[0-9]*"DID_TIME_OUT"*|*"device offline error, dev sr"[0-9]*) ;;
-            *) continue ;;
+            *"sr"[0-9]*"DID_TIME_OUT"*|*"device offline error, dev sr"[0-9]*)
+                dev="/dev/$(grep -oE 'sr[0-9]+' <<<"$line" | head -n1)" ;;
+            "usb "*": reset "*)
+                port="$(cut -d' ' -f2 <<<"$line")"; port="${port%:}"
+                dev="$(optical_usb_ports | awk -v p="$port" '$2 == p {print "/dev/" $1; exit}')" ;;
         esac
-        dev="/dev/$(grep -oE 'sr[0-9]+' <<<"$line" | head -n1)"
+        [ -n "$dev" ] || continue
         [ $((SECONDS - last)) -ge 600 ] || continue   # one alert per incident
         last=$SECONDS
         log "drive error on $dev: $line"
         if timeout 60 eject "$dev" 2>/dev/null; then
-            msg="The disc in $dev can't be read (drive timed out) and was ejected. Clean it and try again, or try another drive."
+            msg="The disc in $dev can't be read (drive timed out / reset) and was ejected. Clean it and try again, or try another drive."
         else
-            msg="The disc in $dev can't be read (drive timed out / went offline). Eject failed — press the drive's eject button or re-plug its USB cable."
+            msg="The disc in $dev can't be read (drive timed out / reset). Eject failed — press the drive's eject button or re-plug its USB cable."
         fi
         notify 8 "Disc can't be read ($(hostname -s))" "$msg"
     done
