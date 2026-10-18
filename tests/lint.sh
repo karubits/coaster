@@ -13,7 +13,7 @@ MAX_EXPOSURE="${MAX_EXPOSURE:-6.5}"
 cd "$REPO"
 
 echo "── shellcheck $(shellcheck --version | sed -n 's/^version: //p')"
-shellcheck coaster.sh setup.sh tests/*.sh
+shellcheck coaster.sh setup.sh tests/*.sh tools/*.sh
 
 echo "── version"
 version="$(sed -n 's/^VERSION=//p' coaster.sh)"

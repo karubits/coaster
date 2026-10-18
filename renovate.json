@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "7 days",
+  "github-actions": {
+    "managerFilePatterns": ["/(^|/)\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Tools downloaded in CI, annotated with a '# renovate:' comment",
+      "managerFilePatterns": ["/(^|/)\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( extractVersion=(?<extractVersion>\\S+))?\\s+[A-Z_]+_VERSION: \"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "extractVersionTemplate": "{{#if extractVersion}}{{{extractVersion}}}{{else}}^v?(?<version>.*)${{/if}}"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Forgejo's runner image is node 22; actions/checkout v5+ needs node 24",
+      "matchFileNames": [".forgejo/**"],
+      "matchPackageNames": ["actions/checkout"],
+      "allowedVersions": "<5"
+    },
+    {
+      "description": "One PR for all CI tooling minor/patch updates",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "CI tooling"
+    }
+  ]
+}

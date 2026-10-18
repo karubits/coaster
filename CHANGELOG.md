@@ -3,6 +3,19 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. Versions follow
 [Semantic Versioning](https://semver.org); each one is a git tag `vX.Y.Z` (and a release).
 
+## [0.4.1] - 2026-10-18
+
+### Added
+- Release automation: pushing a tag `vX.Y.Z` publishes the release (Forgejo and GitHub) with
+  the version's CHANGELOG section as notes; a tag that doesn't match `VERSION` / the CHANGELOG
+  is refused (`tools/release-notes.sh`).
+- Renovate (`renovate.json`, weekly on Forgejo): PRs for the pinned CI actions, gitleaks and
+  Renovate itself, after a 7-day release age.
+- README badges: CI, release, license, Renovate.
+
+### Changed
+- CI verifies the gitleaks download against its published checksums.
+
 ## [0.4.0] - 2026-10-18
 
 ### Changed
@@ -82,6 +95,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), newest first. 
 - udev-triggered DVD rip → H.264/AAC MP4 → Immich upload, `--resume` mode and
   `dvd-backup-resume.service`.
 
+[0.4.1]: https://github.com/Karubits/coaster/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Karubits/coaster/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Karubits/coaster/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/Karubits/coaster/compare/v0.2.3...v0.2.4

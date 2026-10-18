@@ -1,5 +1,10 @@
 # coaster
 
+[![CI](https://github.com/Karubits/coaster/actions/workflows/ci.yml/badge.svg)](https://github.com/Karubits/coaster/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Karubits/coaster?sort=semver)](https://github.com/Karubits/coaster/releases)
+[![License: MIT](https://img.shields.io/github/license/Karubits/coaster)](LICENSE)
+[![Renovate](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](renovate.json)
+
 *A disc's last job before it becomes a coaster.*
 
 Insert a disc → it's backed up to [Immich](https://immich.app) and/or a folder, and every local
@@ -241,14 +246,17 @@ tests/smoke.sh    # check / test-notify / resume modes against a mock Immich + n
 ```
 
 CI runs both on every push and pull request, plus a [gitleaks](https://github.com/gitleaks/gitleaks)
-secret scan of the whole history. The units are hardened as far as mounting and ejecting discs
+secret scan of the whole history. [Renovate](renovate.json) opens a weekly PR when a pinned CI
+action, gitleaks or Renovate itself has a new release (waiting 7 days after a release). The units are hardened as far as mounting and ejecting discs
 allow (`ProtectSystem=strict`, private mounts, no new privileges, restricted namespaces and
 address families, …); see `systemd-analyze security coaster@sr0`.
 
 **Releases:** [Semantic Versioning](https://semver.org). To release: bump `VERSION` in
 `coaster.sh`, add a `## [X.Y.Z] - date` section to [CHANGELOG.md](CHANGELOG.md) (lint checks
-they match), commit, `git tag -a vX.Y.Z -m vX.Y.Z && git push --follow-tags`. `setup.sh` shows
-the version change on update and refuses downgrades.
+they match), commit, `git tag -a vX.Y.Z -m vX.Y.Z && git push --follow-tags`. The release
+workflow then publishes the release with that CHANGELOG section as notes
+(`tools/release-notes.sh` refuses a tag that doesn't match). `setup.sh` shows the version
+change on update and refuses downgrades.
 
 Security issues: see [SECURITY.md](SECURITY.md).
 
