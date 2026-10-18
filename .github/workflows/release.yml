@@ -1,22 +1,35 @@
-# Tag vX.Y.Z pushed → GitHub release with that version's CHANGELOG section as notes.
+# Tag vX.Y.Z arrives (pushed by the Forgejo mirror) → GitHub release with that version's
+# CHANGELOG section as notes. Run by hand with a tag to (re)create the release of an existing
+# tag — GitHub sends no event when more than three tags are pushed at once.
 # tools/release-notes.sh refuses a tag that doesn't match VERSION in coaster.sh / CHANGELOG.
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag, e.g. v0.4.4"
+        required: true
 permissions:
   contents: write
 jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4   # current tools/
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/checkout@v4   # the tagged tree (older tags may predate tools/)
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          path: tagged
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tools/release-notes.sh "$TAG" > notes.md
+          tools/release-notes.sh "$TAG" tagged > notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists"
           else
