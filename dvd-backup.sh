@@ -241,7 +241,7 @@ optical_usb_ports() {  # "sr0 2-3" per USB-attached optical drive
 }
 if [ "$DEVICE" = --watch ]; then
     STEP="watch"
-    last=0
+    last=-600   # SECONDS starts at 0: allow an alert right after (re)start
     journalctl -k -f -n 0 -o cat | while IFS= read -r line; do
         dev=""
         case "$line" in
