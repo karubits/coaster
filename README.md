@@ -48,6 +48,8 @@ disc inserted ─► udev (99-coaster.rules) ─► coaster@sr0.service ─► c
 
 ## Requirements
 
+- **A DVD drive** — USB or internal (SATA). A CD drive only handles CDs; Blu-ray drives read
+  DVDs and CDs too. Several drives work, one disc at a time.
 - Linux with systemd + udev (developed on Debian 13; any recent distro should do)
 - `ffmpeg` ≥ 7.0 (needs the `dvdvideo` demuxer: `ffmpeg -demuxers | grep dvdvideo`), `curl`, `jq`,
   `eject`, util-linux (`mount`, `flock`, `blockdev`)
